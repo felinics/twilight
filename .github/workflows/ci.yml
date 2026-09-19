@@ -74,4 +74,8 @@ jobs:
           ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
           ANTHROPIC_MODEL: ${{ secrets.ANTHROPIC_MODEL }}
           GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
+          # System One (TypeSafe Jev). The gateway tests fall back to
+          # OPENAI_API_KEY when it carries the gateway's own vck_ prefix.
+          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
         run: go test ./... -count=1 -v -run '^TestIntegration_|^TestClient_' -timeout 120s
