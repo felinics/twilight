@@ -63,7 +63,7 @@ func TestUsageIncludesCachedInput(t *testing.T) {
 				}))
 				defer srv.Close()
 				provider := messages.New(messages.WithAPIKey("test-key"), messages.WithBaseURL(srv.URL))
-				params := sdk.GenerateParams{Model: &sdk.Model{ID: "claude-test"}, Messages: []sdk.Message{sdk.UserMessage("hi")}}
+				params := sdk.Request{Model: "claude-test", Messages: []sdk.Message{sdk.UserMessage("hi")}}
 				if !stream {
 					result, err := provider.DoGenerate(context.Background(), params)
 					if err != nil {
@@ -79,7 +79,7 @@ func TestUsageIncludesCachedInput(t *testing.T) {
 					t.Fatal(err)
 				}
 				var stepFinished, finished bool
-				for part := range result.Stream {
+				for part := range result {
 					switch p := part.(type) {
 					case *sdk.ErrorPart:
 						t.Fatalf("stream error: %+v", p)
