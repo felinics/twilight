@@ -1334,7 +1334,12 @@ func TestIntegration_DoStream(t *testing.T) {
 
 // ---------- multi-model integration tests (OpenRouter) ----------
 
-const openRouterGoogleIntegrationModel = "google/gemini-3.6-flash"
+const (
+	openRouterGoogleIntegrationModel = "google/gemini-3.6-flash"
+	// The proxy's plain-chat DeepSeek; "deepseek/deepseek-chat" is no longer
+	// routed there (404 model_not_found).
+	openRouterDeepSeekChatIntegrationModel = "deepseek/deepseek-v4-flash"
+)
 
 func TestIntegration_MultiModel(t *testing.T) {
 	p := newIntegrationProvider(t)
@@ -1345,7 +1350,7 @@ func TestIntegration_MultiModel(t *testing.T) {
 	}{
 		{openRouterGoogleIntegrationModel, false},
 		{"deepseek/deepseek-r1", true},
-		{"deepseek/deepseek-chat", false},
+		{openRouterDeepSeekChatIntegrationModel, false},
 	}
 
 	for _, m := range models {
