@@ -70,7 +70,10 @@ func (a ToolArguments) Unmarshal(v any) error {
 }
 
 // String is the argument text as the model produced it: the JSON document, or
-// the invalid text verbatim. It is what a string-typed wire field carries.
+// the invalid text verbatim. It is for display and logging. A wire field
+// carries Object(), string-typed or not: a backend that parses the arguments
+// of historical tool calls rejects the whole request when one of them is not
+// a document, and it would keep rejecting it on every later call.
 func (a ToolArguments) String() string {
 	if !a.Valid() {
 		return a.Text
@@ -81,8 +84,10 @@ func (a ToolArguments) String() string {
 	return string(a.JSON)
 }
 
-// Object is the arguments as a JSON value for an object-typed wire field: the
-// document itself, or the empty object when the arguments were invalid.
+// Object is the arguments as a JSON value for a wire field: the document
+// itself, or the empty object when the arguments were invalid. Providers put
+// string(Object()) on string-typed fields; the invalid text reaches the model
+// only through the error result the caller answers the call with.
 func (a ToolArguments) Object() json.RawMessage {
 	if a.Valid() && a.JSON != nil {
 		return append(json.RawMessage(nil), a.JSON...)

@@ -295,8 +295,8 @@ func ParseToolArguments(text string) ToolArguments        // classifies provider
 func ToolArgumentsJSON(v any) (ToolArguments, error)      // encodes v in canonical form
 func (a ToolArguments) Valid() bool                        // a document (the zero value counts as {})
 func (a ToolArguments) Unmarshal(v any) error              // ErrInvalidToolArguments when not Valid
-func (a ToolArguments) String() string                     // the text as the model produced it
-func (a ToolArguments) Object() json.RawMessage            // the document, or {} when invalid
+func (a ToolArguments) String() string                     // the text as the model produced it, for display and logs
+func (a ToolArguments) Object() json.RawMessage            // the document, or {} when invalid; what every wire field carries
 
 type ToolOutput struct {
     Text string

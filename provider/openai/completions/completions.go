@@ -411,7 +411,7 @@ func convertAssistantMessage(msg sdk.Message) chatMessage {
 				Type: "function",
 				Function: chatFunctionCall{
 					Name:      p.ToolName,
-					Arguments: p.Input.String(),
+					Arguments: string(p.Input.Object()),
 				},
 			})
 		case sdk.ReasoningPart:

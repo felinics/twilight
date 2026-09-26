@@ -553,7 +553,7 @@ func convertCodexAssistantMessage(msg sdk.Message) []json.RawMessage {
 				Type:      "function_call",
 				CallID:    id,
 				Name:      p.ToolName,
-				Arguments: p.Input.String(),
+				Arguments: string(p.Input.Object()),
 			})
 		}
 	}
