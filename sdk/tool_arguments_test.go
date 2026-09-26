@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 )
@@ -14,7 +15,10 @@ func TestParseToolArguments(t *testing.T) {
 		wantObject string // Object(); {} when invalid
 	}{
 		{"empty text is the empty object", "", true, "{}", "{}"},
-		{"document is compacted", " {\n \"city\" : \"Tokyo\" }\n", true, `{"city":"Tokyo"}`, `{"city":"Tokyo"}`},
+		{"document is canonical", " {\n \"city\" : \"Tokyo\" }\n", true, `{"city":"Tokyo"}`, `{"city":"Tokyo"}`},
+		{"members are sorted, numbers take their binary64 form", `{"z": 1e2, "a": {"d": 2.0, "c": 3}}`, true,
+			`{"a":{"c":3,"d":2},"z":100}`, `{"a":{"c":3,"d":2},"z":100}`},
+		{"repeated member is kept as text", `{"a":1,"a":2}`, false, `{"a":1,"a":2}`, "{}"},
 		{"truncated document is kept as text", `{"city": "Tok`, false, `{"city": "Tok`, "{}"},
 		{"prose is kept as text", "call the tool please", false, "call the tool please", "{}"},
 		{"invalid utf-8 is kept as text", "{\"a\":\"\xff\"}", false, "{\"a\":\"\xff\"}", "{}"},
@@ -45,9 +49,10 @@ func TestParseToolArguments(t *testing.T) {
 
 func TestToolArgumentsJSON(t *testing.T) {
 	a, err := ToolArgumentsJSON(struct {
-		City string `json:"city"`
-	}{City: "Tokyo"})
-	if err != nil || !a.Valid() || a.String() != `{"city":"Tokyo"}` {
+		City  string          `json:"city"`
+		Extra json.RawMessage `json:"extra"`
+	}{City: "Tokyo", Extra: json.RawMessage(`{ "b":1, "a":2 }`)})
+	if err != nil || !a.Valid() || a.String() != `{"city":"Tokyo","extra":{"a":2,"b":1}}` {
 		t.Fatalf("ToolArgumentsJSON = %+v, %v", a, err)
 	}
 	if _, err := ToolArgumentsJSON(make(chan int)); err == nil {

@@ -27,7 +27,7 @@ func padThinkingReplay(messages []chatMessage, compat chatCompletionsCompat) {
 	}
 	for i := range messages {
 		m := &messages[i]
-		if m.Role != "assistant" || len(m.ToolCalls) == 0 {
+		if m.Role != roleAssistant || len(m.ToolCalls) == 0 {
 			continue
 		}
 		if m.ReasoningContent != nil || len(m.ReasoningDetails) > 0 {
@@ -46,7 +46,7 @@ func thinkingReplayValidated(messages []chatMessage, compat chatCompletionsCompa
 		return true
 	}
 	for i := range messages {
-		if messages[i].Role == "assistant" && messages[i].ReasoningContent != nil {
+		if messages[i].Role == roleAssistant && messages[i].ReasoningContent != nil {
 			return true
 		}
 	}

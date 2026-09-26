@@ -30,6 +30,10 @@ import (
 )
 
 const (
+	modalityAudio = "audio"
+)
+
+const (
 	defaultModelID   = "openai/gpt-audio-mini"
 	defaultBaseURL   = "https://openrouter.ai/api/v1"
 	defaultModel     = "openai/gpt-audio-mini"
@@ -124,12 +128,12 @@ func (p *Provider) ListModels(ctx context.Context) ([]*sdk.SpeechModel, error) {
 func isOpenRouterSpeechModel(id string, outputs []string) bool {
 	for _, output := range outputs {
 		switch strings.ToLower(output) {
-		case "speech", "audio":
+		case "speech", modalityAudio:
 			return true
 		}
 	}
 	lowerID := strings.ToLower(id)
-	return strings.Contains(lowerID, "tts") || strings.Contains(lowerID, "audio")
+	return strings.Contains(lowerID, "tts") || strings.Contains(lowerID, modalityAudio)
 }
 
 type openRouterModel struct {
@@ -210,9 +214,9 @@ func (p *Provider) synthesize(ctx context.Context, text string, cfg audioConfig)
 				"content": ttsPrompt(text),
 			},
 		},
-		"modalities": []string{"text", "audio"},
-		"audio":      map[string]any{"voice": cfg.Voice, "format": "pcm16"},
-		"stream":     true,
+		"modalities":  []string{"text", modalityAudio},
+		modalityAudio: map[string]any{"voice": cfg.Voice, "format": "pcm16"},
+		"stream":      true,
 	}
 	if cfg.Speed != 0 {
 		reqBody["speed"] = cfg.Speed

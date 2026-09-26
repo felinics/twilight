@@ -2,8 +2,25 @@ package sdk
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
+
+// CanonicalProviderOptions re-encodes every value and leaves the input alone;
+// a value that is not a JSON document names its namespace in the error.
+func TestCanonicalProviderOptions(t *testing.T) {
+	in := map[string]json.RawMessage{"mine": json.RawMessage(` {"top_p": 0.9, "n": 1} `)}
+	out, err := CanonicalProviderOptions(in)
+	if err != nil || string(out["mine"]) != `{"n":1,"top_p":0.9}` || string(in["mine"]) != ` {"top_p": 0.9, "n": 1} ` {
+		t.Fatalf("CanonicalProviderOptions = %s %v; input now %s", out["mine"], err, in["mine"])
+	}
+	if got, err := CanonicalProviderOptions(nil); err != nil || got != nil {
+		t.Fatalf("nil options = %v %v", got, err)
+	}
+	if _, err := CanonicalProviderOptions(map[string]json.RawMessage{"bad": json.RawMessage(`{`)}); err == nil || !strings.Contains(err.Error(), `"bad"`) {
+		t.Fatalf("invalid value = %v, want an error naming the namespace", err)
+	}
+}
 
 // TestApplyProviderOptions pins the contract both sides rely on: options are
 // keyed by provider namespace, they override what the provider built, and a

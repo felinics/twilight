@@ -10,6 +10,10 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 )
 
+func newWithClient(client *edgeWsClient) *Provider {
+	return &Provider{client: client}
+}
+
 func TestProvider_DoSynthesize(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(mockEdgeTTSHandler(t))

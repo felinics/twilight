@@ -13,6 +13,11 @@ import (
 	"github.com/felinics/twilight/sdk"
 )
 
+const (
+	pathChatCompletions = "/chat/completions"
+	toolTypeFunction    = "function"
+)
+
 const defaultBaseURL = "https://api.githubcopilot.com"
 
 type Provider struct {
@@ -106,7 +111,7 @@ func (p *Provider) TestModel(ctx context.Context, modelID string) (*sdk.ModelTes
 	status, err := utils.ProbeStatus(ctx, p.httpClient, &utils.RequestOptions{
 		Method:  http.MethodPost,
 		BaseURL: p.baseURL,
-		Path:    "/chat/completions",
+		Path:    pathChatCompletions,
 		Headers: p.authHeaders(),
 		Body:    req,
 	})
@@ -140,7 +145,7 @@ func (p *Provider) DoGenerate(ctx context.Context, req sdk.Request) (sdk.ModelRe
 	resp, err := utils.FetchJSON[chatResponse](ctx, p.httpClient, &utils.RequestOptions{
 		Method:  http.MethodPost,
 		BaseURL: p.baseURL,
-		Path:    "/chat/completions",
+		Path:    pathChatCompletions,
 		Headers: p.authHeaders(),
 		Body:    wire,
 	})
@@ -202,7 +207,7 @@ func convertToolChoice(choice sdk.ToolChoice) any {
 		return nil
 	case sdk.ToolChoiceTool:
 		return chatToolChoiceFunction{
-			Type:     "function",
+			Type:     toolTypeFunction,
 			Function: chatToolChoiceName{Name: choice.Tool},
 		}
 	default:
@@ -214,7 +219,7 @@ func convertTools(tools []sdk.ToolDefinition) []chatTool {
 	out := make([]chatTool, 0, len(tools))
 	for _, t := range tools {
 		out = append(out, chatTool{
-			Type: "function",
+			Type: toolTypeFunction,
 			Function: chatFunction{
 				Name:        t.Name,
 				Description: t.Description,
@@ -271,7 +276,7 @@ func convertAssistantMessage(msg sdk.Message) chatMessage {
 			}
 			toolCalls = append(toolCalls, chatToolCall{
 				ID:   id,
-				Type: "function",
+				Type: toolTypeFunction,
 				Function: chatFunctionCall{
 					Name:      p.ToolName,
 					Arguments: p.Input.String(),
@@ -434,7 +439,7 @@ func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.St
 		err := utils.FetchSSE(ctx, p.httpClient, &utils.RequestOptions{
 			Method:  http.MethodPost,
 			BaseURL: p.baseURL,
-			Path:    "/chat/completions",
+			Path:    pathChatCompletions,
 			Headers: p.authHeaders(),
 			Body:    wire,
 		}, func(ev *utils.SSEEvent) error {

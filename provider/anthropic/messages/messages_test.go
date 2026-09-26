@@ -514,7 +514,7 @@ func TestDoGenerate_ToolCallMultiTurn(t *testing.T) {
 				Content: []sdk.MessagePart{sdk.ToolResultPart{
 					ToolCallID: "toolu_abc",
 					ToolName:   "get_weather",
-					Result:     sdk.RawJSONOutput(json.RawMessage(`{"condition":"sunny","temp":25}`)),
+					Result:     sdk.ToolOutput{JSON: json.RawMessage(`{"condition":"sunny","temp":25}`)},
 				}},
 			},
 		},
@@ -582,7 +582,7 @@ func TestDoGenerate_ToolCallEmptyInput(t *testing.T) {
 				Content: []sdk.MessagePart{sdk.ToolResultPart{
 					ToolCallID: "toolu_empty",
 					ToolName:   "list_schedule",
-					Result:     sdk.RawJSONOutput(json.RawMessage(`{"count":0}`)),
+					Result:     sdk.ToolOutput{JSON: json.RawMessage(`{"count":0}`)},
 				}},
 			},
 		},

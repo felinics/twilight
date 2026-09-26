@@ -22,6 +22,15 @@ type ProviderTestResult struct {
 	Error   error
 }
 
+// HTTPStatusError is implemented by provider errors that carry the HTTP
+// status the provider answered with, so callers above the provider can
+// classify a failure (rate limit, authentication, server outage) without
+// knowing the provider's error type.
+type HTTPStatusError interface {
+	error
+	HTTPStatus() int
+}
+
 // ModelTestResult holds the result of a model support check.
 type ModelTestResult struct {
 	Supported bool

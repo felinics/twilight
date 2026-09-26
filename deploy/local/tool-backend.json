@@ -1,0 +1,5 @@
+{
+  "listen": "127.0.0.1:8083",
+  "workspaces": {"sqlite": "./var/owner.db"},
+  "environments": {"local": {"root": "./var/envs"}}
+}

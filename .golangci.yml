@@ -36,6 +36,16 @@ linters:
         - diagnostic
         - performance
         - style
+      settings:
+        hugeParam:
+          # Identity-carrying protocol values (AssignmentKey, Schema,
+          # Assignment, artifact.Ref, session.Commit with its Ext slot) are
+          # 80-128 bytes of string headers and are passed by value on purpose
+          # so a callee cannot mutate the caller's copy. Only genuinely large
+          # values are worth a pointer.
+          sizeThreshold: 136
+        rangeValCopy:
+          sizeThreshold: 136
     gocyclo:
       min-complexity: 40
     nakedret:
@@ -58,14 +68,18 @@ linters:
           - gocritic
           - unparam
           - prealloc
-      # providertest is test infrastructure shared by the provider packages.
-      - path: ^provider/providertest/
+          - gocyclo
+      # Conformance harnesses are test code compiled into non-_test files so
+      # adapters can import them; they get the test exclusions.
+      - path: ^(agentcore/artifact/artifacttest|agentcore/checkpoint/checkpointtest|agentcore/executor/store/storetest|agentcore/inbox/inboxtest|agentcore/process/processtest|agentcore/session/run/runtimetest|agentcore/session/sessiontest|agentcore/turn/turntest|provider/providertest)/
         linters:
           - errcheck
           - gosec
           - goconst
           - gocritic
           - unparam
+          - gocyclo
+          - prealloc
 
 run:
   timeout: 5m

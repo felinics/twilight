@@ -1,0 +1,6 @@
+{
+  "listen": "127.0.0.1:8082",
+  "catalog": "./deploy/local/models.json",
+  "secrets": "./var/secrets",
+  "streaming": true
+}

@@ -1,21 +1,21 @@
 package sdk
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"unicode/utf8"
 )
 
 // ToolArguments is what the model supplied as a tool call's arguments. A model
-// emits argument text; when that text is a JSON document it is kept, compacted,
-// in JSON, and the call can be executed. When it is not -- a truncated or
-// malformed call, which chat-completions style APIs deliver as a plain string --
-// the text is kept verbatim in Text and JSON is nil: the call is still
-// reported, so the caller can answer the model with an invalid-arguments
-// result and let it correct itself; Valid tells the caller not to run it.
-// Exactly one of the two fields is set.
+// emits argument text; when that text is a JSON document it is kept in JSON
+// in canonical form (CanonicalJSON, RFC 8785), and the call can be executed. When it is not -- a
+// truncated or malformed call, which chat-completions style APIs deliver as
+// a plain string, or an object with a repeated member -- the text is kept
+// verbatim in Text and JSON is nil: the call is still reported, so the
+// caller can answer the model with an invalid-arguments result and let it
+// correct itself; Valid tells the caller not to run it. Exactly one of the
+// two fields is set. The constructors keep the canonical form; a literal
+// ToolArguments{JSON: raw} carries whatever bytes it was given.
 type ToolArguments struct {
 	JSON json.RawMessage `json:"json,omitempty"`
 	Text string          `json:"text,omitempty"`
@@ -26,25 +26,24 @@ var ErrInvalidToolArguments = errors.New("twilightai: tool arguments are not val
 
 // ParseToolArguments classifies the argument text a provider received. Empty
 // text is the empty object, the value providers substitute when a model calls
-// a tool that takes no arguments. Text that is not valid UTF-8 or not a JSON
-// document is kept as Text.
+// a tool that takes no arguments. A JSON document is kept in canonical form;
+// text that is not valid UTF-8, not a JSON document, or an object with a
+// repeated member is kept as Text.
 func ParseToolArguments(text string) ToolArguments {
 	if text == "" {
 		return ToolArguments{JSON: json.RawMessage(`{}`)}
 	}
-	if !utf8.ValidString(text) || !json.Valid([]byte(text)) {
+	canonical, err := CanonicalJSON([]byte(text))
+	if err != nil {
 		return ToolArguments{Text: text}
 	}
-	var compact bytes.Buffer
-	if err := json.Compact(&compact, []byte(text)); err != nil {
-		return ToolArguments{Text: text}
-	}
-	return ToolArguments{JSON: json.RawMessage(compact.Bytes())}
+	return ToolArguments{JSON: canonical}
 }
 
-// ToolArgumentsJSON encodes v as the arguments of a tool call.
+// ToolArgumentsJSON encodes v as the arguments of a tool call, in canonical
+// form.
 func ToolArgumentsJSON(v any) (ToolArguments, error) {
-	raw, err := json.Marshal(v)
+	raw, err := canonicalMarshal(v)
 	if err != nil {
 		return ToolArguments{}, fmt.Errorf("twilightai: encode tool arguments: %w", err)
 	}

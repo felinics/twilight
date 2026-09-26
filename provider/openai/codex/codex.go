@@ -14,6 +14,15 @@ import (
 )
 
 const (
+	effortXHigh         = "xhigh"
+	effortMedium        = "medium"
+	effortLow           = "low"
+	effortHigh          = "high"
+	defaultSystemPrompt = "You are a helpful AI assistant."
+	toolTypeFunction    = "function"
+)
+
+const (
 	outputTypeMessage      = "message"
 	outputTypeReasoning    = "reasoning"
 	outputTypeFunctionCall = "function_call"
@@ -94,7 +103,7 @@ func (p *Provider) Test(ctx context.Context) *sdk.ProviderTestResult {
 func (p *Provider) TestModel(ctx context.Context, modelID string) (*sdk.ModelTestResult, error) {
 	req, err := p.buildRequest(&sdk.Request{
 		Model:    modelID,
-		System:   "You are a helpful AI assistant.",
+		System:   defaultSystemPrompt,
 		Messages: []sdk.Message{sdk.UserMessage("ping")},
 	})
 	if err != nil {
@@ -433,8 +442,8 @@ func codexToolChoiceForWire(choice sdk.ToolChoice) any {
 		return string(choice.Mode)
 	case sdk.ToolChoiceTool:
 		return map[string]any{
-			"type":     "function",
-			"function": map[string]any{"name": choice.Tool},
+			"type":           toolTypeFunction,
+			toolTypeFunction: map[string]any{"name": choice.Tool},
 		}
 	default:
 		return nil
@@ -445,7 +454,7 @@ func convertCodexTools(tools []sdk.ToolDefinition) []codexTool {
 	out := make([]codexTool, 0, len(tools))
 	for _, t := range tools {
 		out = append(out, codexTool{
-			Type:        "function",
+			Type:        toolTypeFunction,
 			Name:        t.Name,
 			Description: t.Description,
 			Parameters:  t.Parameters,
@@ -454,7 +463,7 @@ func convertCodexTools(tools []sdk.ToolDefinition) []codexTool {
 	return out
 }
 
-func convertToCodexInput(systemPrompt string, messages []sdk.Message) (string, []json.RawMessage) {
+func convertToCodexInput(systemPrompt string, messages []sdk.Message) (promptOut string, inputOut []json.RawMessage) {
 	var (
 		instructions []string
 		items        []json.RawMessage
@@ -470,7 +479,7 @@ func convertToCodexInput(systemPrompt string, messages []sdk.Message) (string, [
 		}
 		items = append(items, convertCodexMessage(msg)...)
 	}
-	joined := "You are a helpful AI assistant."
+	joined := defaultSystemPrompt
 	if len(instructions) > 0 {
 		joined = joinNonEmpty(instructions...)
 	}
@@ -668,7 +677,7 @@ func joinNonEmpty(values ...string) string {
 		}
 	}
 	if len(out) == 0 {
-		return "You are a helpful AI assistant."
+		return defaultSystemPrompt
 	}
 	return joinWithDoubleNewline(out)
 }

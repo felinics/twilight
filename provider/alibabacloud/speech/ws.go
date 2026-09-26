@@ -28,6 +28,16 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	wsKeyStreaming    = "streaming"
+	wsKeyHeader       = "header"
+	wsKeyAction       = "action"
+	wsKeyTaskID       = "task_id"
+	wsStreamingDuplex = "duplex"
+	wsKeyPayload      = "payload"
+	wsKeyInput        = "input"
+)
+
 // wsClient manages a single CosyVoice synthesis session over WebSocket.
 type wsClient struct {
 	apiKey  string
@@ -217,18 +227,18 @@ func (c *wsClient) sendRunTask(conn *websocket.Conn, taskID string, cfg *audioCo
 	}
 
 	cmd := map[string]any{
-		"header": map[string]any{
-			"action":    "run-task",
-			"task_id":   taskID,
-			"streaming": "duplex",
+		wsKeyHeader: map[string]any{
+			wsKeyAction:    "run-task",
+			wsKeyTaskID:    taskID,
+			wsKeyStreaming: wsStreamingDuplex,
 		},
-		"payload": map[string]any{
+		wsKeyPayload: map[string]any{
 			"task_group": "audio",
 			"task":       "tts",
 			"function":   "SpeechSynthesizer",
 			"model":      cfg.Model,
 			"parameters": params,
-			"input":      map[string]any{},
+			wsKeyInput:   map[string]any{},
 		},
 	}
 	return writeJSON(conn, cmd)
@@ -236,13 +246,13 @@ func (c *wsClient) sendRunTask(conn *websocket.Conn, taskID string, cfg *audioCo
 
 func (c *wsClient) sendContinueTask(conn *websocket.Conn, taskID, text string) error {
 	cmd := map[string]any{
-		"header": map[string]any{
-			"action":    "continue-task",
-			"task_id":   taskID,
-			"streaming": "duplex",
+		wsKeyHeader: map[string]any{
+			wsKeyAction:    "continue-task",
+			wsKeyTaskID:    taskID,
+			wsKeyStreaming: wsStreamingDuplex,
 		},
-		"payload": map[string]any{
-			"input": map[string]any{
+		wsKeyPayload: map[string]any{
+			wsKeyInput: map[string]any{
 				"text": text,
 			},
 		},
@@ -252,13 +262,13 @@ func (c *wsClient) sendContinueTask(conn *websocket.Conn, taskID, text string) e
 
 func (c *wsClient) sendFinishTask(conn *websocket.Conn, taskID string) error {
 	cmd := map[string]any{
-		"header": map[string]any{
-			"action":    "finish-task",
-			"task_id":   taskID,
-			"streaming": "duplex",
+		wsKeyHeader: map[string]any{
+			wsKeyAction:    "finish-task",
+			wsKeyTaskID:    taskID,
+			wsKeyStreaming: wsStreamingDuplex,
 		},
-		"payload": map[string]any{
-			"input": map[string]any{},
+		wsKeyPayload: map[string]any{
+			wsKeyInput: map[string]any{},
 		},
 	}
 	return writeJSON(conn, cmd)

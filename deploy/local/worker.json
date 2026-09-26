@@ -1,0 +1,8 @@
+{
+  "identity": {"name": "worker-1"},
+  "listen": "127.0.0.1:8081",
+  "executions": {"sqlite": "./var/executions.db"},
+  "lease": "30s",
+  "backends": {"model": "http://127.0.0.1:8082", "tool": "http://127.0.0.1:8083"},
+  "retry": {"maxAttempts": 3, "backoff": "50ms"}
+}

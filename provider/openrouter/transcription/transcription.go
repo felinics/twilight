@@ -15,6 +15,10 @@ import (
 )
 
 const (
+	partTypeText = "text"
+)
+
+const (
 	defaultModelID = "openai/gpt-4o-mini-transcribe"
 	defaultBaseURL = "https://openrouter.ai/api/v1"
 )
@@ -152,7 +156,7 @@ func (p *Provider) DoTranscribe(ctx context.Context, params sdk.TranscriptionPar
 			{
 				"role": "user",
 				"content": []map[string]any{
-					{"type": "text", "text": prompt},
+					{"type": partTypeText, partTypeText: prompt},
 					{
 						"type": "input_audio",
 						"input_audio": map[string]any{
@@ -214,8 +218,8 @@ func extractText(content any) string {
 			if !ok {
 				continue
 			}
-			if obj["type"] == "text" {
-				if text, ok := obj["text"].(string); ok {
+			if obj["type"] == partTypeText {
+				if text, ok := obj[partTypeText].(string); ok {
 					parts = append(parts, text)
 				}
 			}

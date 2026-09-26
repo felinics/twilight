@@ -12,10 +12,17 @@ import (
 //
 // It is pure data at the top level: no provider client, no callbacks. The
 // model is a provider-scoped string ID; provider binding happens when a
-// ModelCatalog resolves a ModelInvoker. Messages, ProviderOptions and
-// ResponseFormat.JSONSchema still carry open JSON shapes, so the agent
-// runtime freezes a Request into its own canonical run.ModelRequest before
-// digesting or persisting it; the request digest is defined there.
+// ModelCatalog resolves a ModelInvoker.
+//
+// A Request built from the SDK's constructors marshals deterministically:
+// struct members are written in declaration order, maps by sorted key, and
+// the open JSON the SDK carries through -- tool arguments (ToolArguments),
+// tool outputs (ToolOutput) and ProviderOptions -- is kept in canonical
+// form by ParseToolArguments, ToolArgumentsJSON, JSONOutput, RawJSONOutput
+// and CanonicalProviderOptions (RFC 8785, see CanonicalJSON). The same input
+// therefore gives the same bytes, which is what a digest over a Request
+// needs; a caller that assigns raw JSON to these fields directly is
+// responsible for canonicalizing it first.
 type Request struct {
 	// Model is the provider-scoped model ID (e.g. "claude-sonnet-5").
 	Model string `json:"model"`
@@ -44,7 +51,8 @@ type Request struct {
 	// members are request-body members of that provider's wire request:
 	// ApplyProviderOptions merges them in, so a caller can reach a wire feature
 	// the SDK does not model, or override one it does. Values are JSON and
-	// participate in the digest.
+	// participate in the digest; CanonicalProviderOptions puts them in
+	// canonical form.
 	ProviderOptions map[string]json.RawMessage `json:"providerOptions,omitempty"`
 }
 

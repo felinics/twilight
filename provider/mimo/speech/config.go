@@ -2,6 +2,9 @@ package speech
 
 import "strings"
 
+// formatPCM16 is the raw PCM output format name on the MiMo wire.
+const formatPCM16 = "pcm16"
+
 type audioConfig struct {
 	Voice       string
 	Format      string
@@ -30,7 +33,7 @@ func parseConfig(cfg map[string]any) audioConfig {
 
 func contentTypeForFormat(format string) string {
 	switch strings.ToLower(strings.TrimSpace(format)) {
-	case "pcm16":
+	case formatPCM16:
 		return "audio/pcm"
 	case "wav":
 		return "audio/wav"

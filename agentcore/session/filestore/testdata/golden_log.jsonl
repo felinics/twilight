@@ -1,0 +1,2 @@
+{"seq":0,"commitId":"c1","batches":[{"stream":{"domain":"chat"},"events":[{"type":"twilight/x/a","recordedAtUnixMilli":1,"payload":{"a":1}},{"type":"twilight/x/b","recordedAtUnixMilli":2,"payload":{"b":[1,2]}}]}]}
+{"seq":1,"commitId":"c2","batches":[{"stream":{"domain":"chat"},"events":[{"type":"twilight/x/c","recordedAtUnixMilli":3,"payload":{}}]},{"stream":{"domain":"run","id":"r7"},"events":[{"type":"twilight/run/created","recordedAtUnixMilli":3,"payload":{"runId":"r7"}}]}]}

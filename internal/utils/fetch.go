@@ -34,6 +34,9 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("api error %d: %s", e.StatusCode, e.Status)
 }
 
+// HTTPStatus implements sdk.HTTPStatusError.
+func (e *APIError) HTTPStatus() int { return e.StatusCode }
+
 // Detail returns the error message with the raw response body appended
 // when available, useful for diagnosing opaque upstream errors like
 // "Provider returned error".
