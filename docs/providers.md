@@ -55,7 +55,7 @@ type Model struct {
 
 | Status | Meaning |
 |--------|---------|
-| `ProviderStatusOK` | Connected and API key is valid |
+| `ProviderStatusOK` | The provider's check succeeded; public discovery endpoints only establish reachability |
 | `ProviderStatusUnhealthy` | TCP connection succeeded but API returned an error (e.g. 401/403 auth failure) |
 | `ProviderStatusUnreachable` | Cannot establish a network connection to the endpoint |
 
@@ -68,7 +68,7 @@ if result.Status != sdk.ProviderStatusOK {
 
 ### Model Discovery
 
-`ListModels(ctx)` returns all models available from the provider. Each returned `Model` is bound to the provider and ready for use:
+`ListModels(ctx)` returns all models available from the provider. Each returned `Model` is bound to the provider. For providers with explicit model routing, also check that a route is registered:
 
 ```go
 models, err := provider.ListModels(ctx)
@@ -86,6 +86,49 @@ if result.Supported {
     // safe to use this model
 }
 ```
+
+## Custom HTTP Headers
+
+Anthropic Messages, all OpenAI providers (including embeddings, images, speech
+and transcription), Google Generative AI, GitHub Copilot and OpenCode Go support
+`WithHeaders(map[string]string)` for provider defaults and
+`sdk.WithRequestHeaders(ctx, headers)` for call-scoped values.
+
+```go
+provider := completions.New(
+    completions.WithAPIKey("sk-..."),
+    completions.WithHeaders(map[string]string{"User-Agent": "my-agent/1.0"}),
+)
+ctx := sdk.WithRequestHeaders(context.Background(), map[string]string{
+    "X-Conversation-ID": conversationID,
+})
+result, err := provider.ChatModel("gpt-4o-mini").Generate(ctx, sdk.Request{
+    Messages: []sdk.Message{sdk.UserMessage("Hello")},
+})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(result.Text)
+```
+
+Header names are case-insensitive. Precedence is **defaults < provider headers <
+request-context headers**. Both APIs copy their input maps when called; mutating
+those maps later does not reconfigure a provider or context. Nested request
+contexts inherit headers and override matching names. Multiple `WithHeaders`
+provider options replace the provider header map; use one map to combine defaults.
+SSE negotiation headers, the JSON body `Content-Type`, generated multipart
+boundaries, and AWS signing are applied after custom headers to preserve their
+transport requirements.
+
+Use a context per conversation for session IDs, and reuse it for every call in
+that conversation, including retries and the calls that replay tool results. The
+same context can be passed to `ListModels`, `Test` and `TestModel`. This keeps
+session data out of shared provider state. Attach headers only to the provider
+calls that should receive them; child contexts inherit them, including contexts
+derived for your own tool code. For that reason, keep credentials such as
+`Authorization` in provider options rather than the context:
+a context header overrides the API key of every provider that receives it. Other
+provider packages may ignore request-context headers.
 
 ## OpenAI Completions Provider
 
@@ -111,6 +154,7 @@ model := provider.ChatModel("gpt-4o-mini")
 | `WithBedrockCredentials(region, accessKeyID, secretAccessKey, sessionToken)` | disabled | Use AWS SigV4 with static AWS credentials for Bedrock |
 | `WithBaseURL(url)` | `https://api.openai.com/v1` | Base URL for API requests |
 | `WithHTTPClient(client)` | `&http.Client{}` | Custom HTTP client (for proxies, timeouts, etc.) |
+| `WithHeaders(headers)` | none | Provider-wide headers; request-context headers take precedence |
 | `WithMessageRoleCapabilities(capabilities)` | developer + mid-system enabled | Override instruction roles for a less-capable OpenAI-compatible endpoint |
 | `WithDeepSeekChatCompletionsCompat()` | disabled | Map `WithReasoningEffort("none")` to DeepSeek's thinking disable toggle; always send `reasoning_content` on replayed tool-call messages |
 | `WithMiniMaxChatCompletionsCompat()` | disabled | Send `reasoning_split: true` and map reasoning effort to MiniMax's thinking toggle |
@@ -312,6 +356,7 @@ their native roles and positions.
 | `WithBedrockCredentials(region, accessKeyID, secretAccessKey, sessionToken)` | disabled | Use AWS SigV4 with static AWS credentials for Bedrock |
 | `WithBaseURL(url)` | `https://api.openai.com/v1` | Base URL for API requests |
 | `WithHTTPClient(client)` | `&http.Client{}` | Custom HTTP client |
+| `WithHeaders(headers)` | none | Provider-wide headers; request-context headers take precedence |
 
 ### API Endpoints for Discovery
 
@@ -412,6 +457,7 @@ The account ID is optional — if omitted, the provider extracts it from the JWT
 | `WithOriginator(name)` | `"codex_cli_rs"` | Originator identifier sent in the `originator` header |
 | `WithBaseURL(url)` | `https://chatgpt.com/backend-api` | Base URL for API requests |
 | `WithHTTPClient(client)` | `&http.Client{}` | Custom HTTP client |
+| `WithHeaders(headers)` | none | Provider-wide headers; request-context headers take precedence |
 
 ### Available Models
 
@@ -511,6 +557,7 @@ model := provider.ChatModel(copilot.AutoModel)
 | `WithAPIKey(token)` | `""` | Alias for `WithGitHubToken` for migration convenience |
 | `WithBaseURL(url)` | `https://api.githubcopilot.com` | Base URL for API requests |
 | `WithHTTPClient(client)` | `&http.Client{}` | Custom HTTP client |
+| `WithHeaders(headers)` | none | Provider-wide headers; request-context headers take precedence |
 | `WithMessageRoleCapabilities(capabilities)` | both disabled | Enable native developer or mid-conversation system roles only when the configured Copilot endpoint supports them |
 
 ### Model Catalog
@@ -557,6 +604,116 @@ The provider reuses the same OpenAI-compatible chat-completions mapping as Twili
 
 ---
 
+## OpenCode Go Provider
+
+`provider/opencode/go` (package `opencodego`) exposes one provider that delegates
+to the existing Chat Completions, Responses and Anthropic Messages providers.
+The base URL defaults to `https://opencode.ai/zen/go/v1`.
+
+```go
+import opencodego "github.com/felinics/twilight/provider/opencode/go"
+
+provider := opencodego.New(
+    opencodego.WithAPIKey("your-opencode-go-key"),
+    opencodego.WithHeaders(map[string]string{"User-Agent": "my-agent/1.0"}),
+)
+ctx := sdk.WithRequestHeaders(context.Background(), map[string]string{
+    opencodego.SessionHeader: conversationID,
+})
+result, err := provider.ChatModel("glm-5.2").Generate(ctx, sdk.Request{
+    Messages: []sdk.Message{sdk.UserMessage("Explain this code")},
+})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(result.Text)
+```
+
+OpenCode Go asks clients to identify their application with a User-Agent and
+send a stable `x-opencode-session` for each conversation. The caller owns that
+ID: keep it stable for every call in the conversation, including tool-result
+replays and retries, and use
+a different context for a different conversation. The SDK neither generates a
+new session ID per request nor checks for one before sending; custom HTTP
+transports may also supply headers. See the [official client requirements](https://opencode.ai/docs/go/#where-can-i-use-it).
+
+### Routing and discovery
+
+| Protocol | Path relative to the base URL | Example documented model |
+|----------|------------------------------|--------------------------|
+| `ProtocolCompletions` | `/chat/completions` | `glm-5.2` |
+| `ProtocolResponses` | `/responses` | `gpt-5.6-luna` |
+| `ProtocolMessages` | `/messages` | `minimax-m2.7` |
+
+`Catalog()` returns the explicit model/protocol routes from the [official
+endpoint table](https://opencode.ai/docs/go/#endpoints), checked on 2026-09-21,
+plus `deepseek-flash`, which the table omits but the live service lists and
+serves.
+`provider.ProtocolForModel(id)` exposes the routing decision for applications
+that need protocol-specific reasoning or cache settings. Generic generation
+parameters, tools, reasoning metadata and stream events retain the selected
+protocol provider's behavior. The Go wrapper does not infer model-family
+compatibility flags or thinking modes: OpenCode Go is its own service, and a
+model's name says nothing about which upstream serves it.
+
+`Request.ProviderOptions` for this provider are keyed by its name,
+`"opencode-go"`, and are applied to the selected protocol's wire request as that
+protocol provider would apply its own. Options keyed by the protocol providers'
+namespaces (`"openai-completions"`, `"openai-responses"`,
+`"anthropic-messages"`) are not applied.
+
+Two adjustments apply to every Completions route. Both come from the service's
+observed behavior, verified on 2026-09-20, not from the model vendor's API:
+
+- Developer messages are sent as system messages. The routes accept the
+  developer role, but several models silently ignore its content, while every
+  model honors system messages.
+- A replayed assistant tool call always carries `reasoning_content`, empty when
+  the history has none. Some routes reject the request otherwise, and every
+  route accepts the empty value.
+
+Other upstream behavior passes through unchanged. `ReasoningEffort` is sent as
+`reasoning_effort`; the service maps `"none"` to disabled thinking on most
+routes, while `deepseek-v4-flash` ignores every thinking control and always
+reasons. `glm-5.3-flash` rejects a request that sets a reasoning effort with
+`MaxTokens` of 1024 or less.
+
+`ListModels(ctx)` fetches the live `/models` list, including new models. The
+upstream list does not include protocol metadata. A listed model can therefore
+be available upstream but not yet have a local route. Unknown models fail before
+generation or probing; model-name prefixes are not used to guess a protocol.
+Register a documented new route (or override an existing one) explicitly:
+
+```go
+provider := opencodego.New(
+    opencodego.WithAPIKey("your-opencode-go-key"),
+    opencodego.WithModelProtocols(map[string]opencodego.Protocol{
+        "new-model-id": opencodego.ProtocolMessages,
+    }),
+)
+```
+
+Use raw API model IDs, such as `glm-5.2`. The `opencode-go/` prefix belongs to
+OpenCode's application config and is not part of the API model ID.
+
+### Options and probes
+
+| Option | Purpose |
+|--------|---------|
+| `WithAPIKey(key)` | Bearer authentication for OpenAI endpoints; `x-api-key` for Messages |
+| `WithBaseURL(url)` | Override the base URL, including `/v1` |
+| `WithHTTPClient(client)` | Custom HTTP client |
+| `WithHeaders(headers)` | Snapshot provider-wide HTTP headers |
+| `WithModelProtocols(routes)` | Snapshot explicit additional/overridden model routes |
+
+`Test(ctx)` only checks reachability through the public models endpoint; its
+success does not validate credentials or generation access. `TestModel(ctx, id)`
+sends a small real generation request through the model's selected protocol.
+Supply a session context and your application's User-Agent for the probe too.
+A rejected request is returned as an error, including a missing session header;
+400/422/429 responses are not treated as successful probes. Generation probes
+can incur usage charges.
+
 ## Anthropic Provider
 
 The `provider/anthropic/messages` package implements the [Anthropic Messages API](https://docs.anthropic.com/en/api/messages) for Claude models.
@@ -580,6 +737,7 @@ model := provider.ChatModel("claude-sonnet-4-20250514")
 | `WithAuthToken(token)` | `""` | OAuth token sent as `Authorization: Bearer <token>` |
 | `WithBaseURL(url)` | `https://api.anthropic.com` | Base URL for API requests |
 | `WithHTTPClient(client)` | `&http.Client{}` | Custom HTTP client |
+| `WithHeaders(headers)` | none | Provider-wide headers; request-context headers take precedence |
 | `WithThinking(config)` | `nil` | Enable extended thinking for reasoning |
 | `WithMidConversationSystemMessages(enabled)` | `false` | Preserve interleaved system messages for models that document native support |
 
@@ -679,6 +837,7 @@ model := provider.ChatModel("gemini-2.5-flash")
 | `WithAPIKey(key)` | `""` | API key sent as `x-goog-api-key` header |
 | `WithBaseURL(url)` | `https://generativelanguage.googleapis.com/v1beta` | Base URL |
 | `WithHTTPClient(client)` | `&http.Client{}` | Custom HTTP client |
+| `WithHeaders(headers)` | none | Provider-wide headers; request-context headers take precedence |
 
 ### Model ID
 
@@ -816,6 +975,7 @@ result, err := sdk.EditImage(ctx,
 | `WithAPIKey(key)` | `""` | API key sent as `Authorization: Bearer <key>` |
 | `WithBaseURL(url)` | `https://api.openai.com/v1` | Base URL for API requests |
 | `WithHTTPClient(client)` | `&http.Client{}` | Custom HTTP client |
+| `WithHeaders(headers)` | none | Provider-wide headers; request-context headers take precedence |
 
 #### Supported Models
 
@@ -987,6 +1147,7 @@ vec, err := sdk.Embed(ctx, "Hello world",
 | `WithBedrockCredentials(region, accessKeyID, secretAccessKey, sessionToken)` | disabled | Use AWS SigV4 with static AWS credentials for Bedrock |
 | `WithBaseURL(url)` | `https://api.openai.com/v1` | Base URL for API requests |
 | `WithHTTPClient(client)` | `&http.Client{}` | Custom HTTP client |
+| `WithHeaders(headers)` | none | Provider-wide headers; request-context headers take precedence |
 
 #### OpenAI-Compatible Endpoints
 
@@ -1157,6 +1318,7 @@ result, err := sdk.GenerateSpeech(ctx,
 | `WithAPIKey(key)` | `""` | API key for `Authorization: Bearer` |
 | `WithBaseURL(url)` | `https://api.openai.com/v1` | Override for proxies or testing |
 | `WithHTTPClient(client)` | `&http.Client{}` | Custom HTTP client |
+| `WithHeaders(headers)` | none | Provider-wide headers; request-context headers take precedence |
 
 #### OpenAI-Compatible Endpoints
 

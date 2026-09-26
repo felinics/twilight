@@ -79,12 +79,13 @@ func BuildRequest(ctx context.Context, opts *RequestOptions) (*http.Request, err
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	if opts.Body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
 	for k, v := range opts.Headers {
 		req.Header.Set(k, v)
+	}
+
+	// The body is always JSON-encoded above, so custom headers must not relabel it.
+	if opts.Body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 
 	if opts.Prepare != nil {

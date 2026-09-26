@@ -23,6 +23,14 @@ const (
 
 type Option func(*Provider)
 
+// WithHeaders sets provider-wide HTTP headers, overriding defaults. The map is
+// copied when the option is created. Use sdk.WithRequestHeaders for call-scoped
+// values such as session IDs; those take precedence over these headers.
+func WithHeaders(headers map[string]string) Option {
+	headers = utils.MergeHeaders(headers)
+	return func(p *Provider) { p.headers = headers }
+}
+
 func WithAPIKey(key string) Option { return func(p *Provider) { p.apiKey = key } }
 func WithBaseURL(url string) Option {
 	return func(p *Provider) { p.baseURL = strings.TrimRight(url, "/") }
@@ -30,6 +38,7 @@ func WithBaseURL(url string) Option {
 func WithHTTPClient(hc *http.Client) Option { return func(p *Provider) { p.httpClient = hc } }
 
 type Provider struct {
+	headers    map[string]string
 	apiKey     string
 	baseURL    string
 	httpClient *http.Client
@@ -55,7 +64,9 @@ func (p *Provider) ListModels(ctx context.Context) ([]*sdk.TranscriptionModel, e
 	if err != nil {
 		return nil, fmt.Errorf("openai transcription: build list models request: %w", err)
 	}
-	req.Header.Set("Authorization", utils.BearerToken(p.apiKey))
+	for key, value := range p.requestHeaders(ctx) {
+		req.Header.Set(key, value)
+	}
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
@@ -142,8 +153,10 @@ func (p *Provider) DoTranscribe(ctx context.Context, params sdk.TranscriptionPar
 	if err != nil {
 		return nil, fmt.Errorf("openai transcription: build request: %w", err)
 	}
+	for key, value := range p.requestHeaders(ctx) {
+		req.Header.Set(key, value)
+	}
 	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("Authorization", utils.BearerToken(p.apiKey))
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
@@ -268,4 +281,8 @@ func decodeResponse(r io.Reader) (*sdk.TranscriptionResult, error) {
 		return nil, fmt.Errorf("openai transcription: decode response: %w", err)
 	}
 	return &sdk.TranscriptionResult{Text: simple.Text}, nil
+}
+
+func (p *Provider) requestHeaders(ctx context.Context) map[string]string {
+	return utils.RequestHeaders(ctx, utils.AuthHeader(p.apiKey), p.headers)
 }

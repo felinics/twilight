@@ -67,6 +67,7 @@ func normalizeThinkingLevel(level string) string {
 }
 
 type Provider struct {
+	headers    map[string]string
 	apiKey     string
 	baseURL    string
 	httpClient *http.Client
@@ -74,6 +75,14 @@ type Provider struct {
 }
 
 type Option func(*Provider)
+
+// WithHeaders sets provider-wide HTTP headers, overriding defaults. The map is
+// copied when the option is created. Use sdk.WithRequestHeaders for call-scoped
+// values such as session IDs; those take precedence over these headers.
+func WithHeaders(headers map[string]string) Option {
+	headers = utils.MergeHeaders(headers)
+	return func(p *Provider) { p.headers = headers }
+}
 
 func WithAPIKey(apiKey string) Option {
 	return func(p *Provider) {
@@ -123,7 +132,7 @@ func (p *Provider) ListModels(ctx context.Context) ([]sdk.Model, error) {
 		Method:  http.MethodGet,
 		BaseURL: p.baseURL,
 		Path:    "/models",
-		Headers: p.authHeaders(),
+		Headers: p.requestHeaders(ctx),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("google: list models request failed: %w", err)
@@ -148,7 +157,7 @@ func (p *Provider) Test(ctx context.Context) *sdk.ProviderTestResult {
 		BaseURL: p.baseURL,
 		Path:    "/models",
 		Query:   map[string]string{"pageSize": "1"},
-		Headers: p.authHeaders(),
+		Headers: p.requestHeaders(ctx),
 	})
 	if err != nil {
 		return classifyError(err)
@@ -162,7 +171,7 @@ func (p *Provider) TestModel(ctx context.Context, modelID string) (*sdk.ModelTes
 		Method:  http.MethodGet,
 		BaseURL: p.baseURL,
 		Path:    "/" + modelPath,
-		Headers: p.authHeaders(),
+		Headers: p.requestHeaders(ctx),
 	})
 	if err == nil {
 		return &sdk.ModelTestResult{Supported: true, Message: "supported"}, nil
@@ -176,7 +185,7 @@ func (p *Provider) TestModel(ctx context.Context, modelID string) (*sdk.ModelTes
 		Method:  http.MethodPost,
 		BaseURL: p.baseURL,
 		Path:    "/" + modelPath + ":generateContent",
-		Headers: p.authHeaders(),
+		Headers: p.requestHeaders(ctx),
 		Body: map[string]any{
 			"contents":         []map[string]any{{"parts": []map[string]string{{"text": "hi"}}}},
 			"generationConfig": map[string]int{"maxOutputTokens": 1},
@@ -230,7 +239,7 @@ func (p *Provider) DoGenerate(ctx context.Context, req sdk.Request) (sdk.ModelRe
 		Method:  http.MethodPost,
 		BaseURL: p.baseURL,
 		Path:    "/" + modelPath + ":generateContent",
-		Headers: p.authHeaders(),
+		Headers: p.requestHeaders(ctx),
 		Body:    body,
 	})
 	if err != nil {
@@ -659,7 +668,7 @@ func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.St
 			BaseURL: p.baseURL,
 			Path:    "/" + modelPath + ":streamGenerateContent",
 			Query:   map[string]string{"alt": "sse"},
-			Headers: p.authHeaders(),
+			Headers: p.requestHeaders(ctx),
 			Body:    body,
 		}, func(ev *utils.SSEEvent) error {
 			var chunk generateResponse
@@ -815,10 +824,8 @@ func getModelPath(modelID string) string {
 	return "models/" + modelID
 }
 
-func (p *Provider) authHeaders() map[string]string {
-	return map[string]string{
-		"x-goog-api-key": p.apiKey,
-	}
+func (p *Provider) requestHeaders(ctx context.Context) map[string]string {
+	return utils.RequestHeaders(ctx, map[string]string{"x-goog-api-key": p.apiKey}, p.headers)
 }
 
 func generateID() string {

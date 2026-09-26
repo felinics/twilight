@@ -16,6 +16,7 @@ import (
 const defaultBaseURL = "https://api.githubcopilot.com"
 
 type Provider struct {
+	headers      map[string]string
 	githubToken  string
 	baseURL      string
 	httpClient   *http.Client
@@ -29,6 +30,14 @@ func WithGitHubToken(token string) Option {
 	return func(p *Provider) {
 		p.githubToken = token
 	}
+}
+
+// WithHeaders sets provider-wide HTTP headers, overriding defaults. The map is
+// copied when the option is created. Use sdk.WithRequestHeaders for call-scoped
+// values such as session IDs; those take precedence over these headers.
+func WithHeaders(headers map[string]string) Option {
+	headers = utils.MergeHeaders(headers)
+	return func(p *Provider) { p.headers = headers }
 }
 
 // WithAPIKey is an alias for WithGitHubToken so callers can swap providers with minimal call-site changes.
@@ -107,7 +116,7 @@ func (p *Provider) TestModel(ctx context.Context, modelID string) (*sdk.ModelTes
 		Method:  http.MethodPost,
 		BaseURL: p.baseURL,
 		Path:    "/chat/completions",
-		Headers: p.authHeaders(),
+		Headers: p.requestHeaders(ctx),
 		Body:    req,
 	})
 	if err != nil {
@@ -141,7 +150,7 @@ func (p *Provider) DoGenerate(ctx context.Context, req sdk.Request) (sdk.ModelRe
 		Method:  http.MethodPost,
 		BaseURL: p.baseURL,
 		Path:    "/chat/completions",
-		Headers: p.authHeaders(),
+		Headers: p.requestHeaders(ctx),
 		Body:    wire,
 	})
 	if err != nil {
@@ -435,7 +444,7 @@ func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.St
 			Method:  http.MethodPost,
 			BaseURL: p.baseURL,
 			Path:    "/chat/completions",
-			Headers: p.authHeaders(),
+			Headers: p.requestHeaders(ctx),
 			Body:    wire,
 		}, func(ev *utils.SSEEvent) error {
 			if ev.Data == "[DONE]" {
@@ -575,8 +584,6 @@ func classifyError(err error) *sdk.ProviderTestResult {
 	}
 }
 
-func (p *Provider) authHeaders() map[string]string {
-	return map[string]string{
-		"Authorization": utils.BearerToken(p.githubToken),
-	}
+func (p *Provider) requestHeaders(ctx context.Context) map[string]string {
+	return utils.RequestHeaders(ctx, utils.AuthHeader(p.githubToken), p.headers)
 }

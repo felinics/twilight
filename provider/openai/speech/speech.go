@@ -30,6 +30,14 @@ const (
 // Option configures the OpenAI TTS provider.
 type Option func(*Provider)
 
+// WithHeaders sets provider-wide HTTP headers, overriding defaults. The map is
+// copied when the option is created. Use sdk.WithRequestHeaders for call-scoped
+// values such as session IDs; those take precedence over these headers.
+func WithHeaders(headers map[string]string) Option {
+	headers = utils.MergeHeaders(headers)
+	return func(p *Provider) { p.headers = headers }
+}
+
 // WithAPIKey sets the API key used for Bearer authentication.
 func WithAPIKey(key string) Option {
 	return func(p *Provider) { p.apiKey = key }
@@ -47,6 +55,7 @@ func WithHTTPClient(hc *http.Client) Option {
 
 // Provider implements sdk.SpeechProvider for the OpenAI /audio/speech API.
 type Provider struct {
+	headers    map[string]string
 	apiKey     string
 	baseURL    string
 	httpClient *http.Client
@@ -79,7 +88,9 @@ func (p *Provider) ListModels(ctx context.Context) ([]*sdk.SpeechModel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("openai speech: build list models request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	for key, value := range p.requestHeaders(ctx) {
+		req.Header.Set(key, value)
+	}
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
@@ -219,8 +230,10 @@ func (p *Provider) doRequest(ctx context.Context, model, text string, cfg audioC
 	if err != nil {
 		return nil, fmt.Errorf("openai speech: build request: %w", err)
 	}
+	for key, value := range p.requestHeaders(ctx) {
+		req.Header.Set(key, value)
+	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
@@ -232,4 +245,8 @@ func (p *Provider) doRequest(ctx context.Context, model, text string, cfg audioC
 		return nil, fmt.Errorf("openai speech: unexpected status %d: %s", resp.StatusCode, string(body))
 	}
 	return resp.Body, nil
+}
+
+func (p *Provider) requestHeaders(ctx context.Context) map[string]string {
+	return utils.RequestHeaders(ctx, utils.AuthHeader(p.apiKey), p.headers)
 }

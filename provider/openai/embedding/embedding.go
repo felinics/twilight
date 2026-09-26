@@ -12,6 +12,7 @@ import (
 const defaultBaseURL = "https://api.openai.com/v1"
 
 type Provider struct {
+	headers        map[string]string
 	apiKey         string
 	baseURL        string
 	httpClient     *http.Client
@@ -19,6 +20,14 @@ type Provider struct {
 }
 
 type Option func(*Provider)
+
+// WithHeaders sets provider-wide HTTP headers, overriding defaults. The map is
+// copied when the option is created. Use sdk.WithRequestHeaders for call-scoped
+// values such as session IDs; those take precedence over these headers.
+func WithHeaders(headers map[string]string) Option {
+	headers = utils.MergeHeaders(headers)
+	return func(p *Provider) { p.headers = headers }
+}
 
 func WithAPIKey(apiKey string) Option {
 	return func(p *Provider) { p.apiKey = apiKey }
@@ -85,7 +94,7 @@ func (p *Provider) DoEmbed(ctx context.Context, params sdk.EmbedParams) (*sdk.Em
 		Method:  http.MethodPost,
 		BaseURL: p.baseURL,
 		Path:    "/embeddings",
-		Headers: p.authHeaders(),
+		Headers: p.requestHeaders(ctx),
 		Prepare: p.prepareRequest,
 		Body:    req,
 	})
@@ -106,12 +115,10 @@ func (p *Provider) DoEmbed(ctx context.Context, params sdk.EmbedParams) (*sdk.Em
 	}, nil
 }
 
-func (p *Provider) authHeaders() map[string]string {
-	if p.prepareRequest != nil {
-		return nil
+func (p *Provider) requestHeaders(ctx context.Context) map[string]string {
+	var defaults map[string]string
+	if p.prepareRequest == nil && p.apiKey != "" {
+		defaults = utils.AuthHeader(p.apiKey)
 	}
-	if p.apiKey == "" {
-		return nil
-	}
-	return utils.AuthHeader(p.apiKey)
+	return utils.RequestHeaders(ctx, defaults, p.headers)
 }

@@ -14,6 +14,7 @@ const defaultBaseURL = "https://api.openai.com/v1"
 // Provider implements sdk.ImageGenerationProvider and sdk.ImageEditProvider
 // for the OpenAI Images API.
 type Provider struct {
+	headers    map[string]string
 	apiKey     string
 	baseURL    string
 	httpClient *http.Client
@@ -21,6 +22,14 @@ type Provider struct {
 
 // Option configures the Provider.
 type Option func(*Provider)
+
+// WithHeaders sets provider-wide HTTP headers, overriding defaults. The map is
+// copied when the option is created. Use sdk.WithRequestHeaders for call-scoped
+// values such as session IDs; those take precedence over these headers.
+func WithHeaders(headers map[string]string) Option {
+	headers = utils.MergeHeaders(headers)
+	return func(p *Provider) { p.headers = headers }
+}
 
 func WithAPIKey(apiKey string) Option {
 	return func(p *Provider) { p.apiKey = apiKey }
@@ -87,7 +96,7 @@ func (p *Provider) DoGenerate(ctx context.Context, params *sdk.ImageGenerationPa
 		Method:  http.MethodPost,
 		BaseURL: p.baseURL,
 		Path:    "/images/generations",
-		Headers: utils.AuthHeader(p.apiKey),
+		Headers: p.requestHeaders(ctx),
 		Body:    req,
 	})
 	if err != nil {
@@ -139,7 +148,7 @@ func (p *Provider) doEditJSON(ctx context.Context, params *sdk.ImageEditParams) 
 		Method:  http.MethodPost,
 		BaseURL: p.baseURL,
 		Path:    "/images/edits",
-		Headers: utils.AuthHeader(p.apiKey),
+		Headers: p.requestHeaders(ctx),
 		Body:    req,
 	})
 	if err != nil {
@@ -195,4 +204,8 @@ func needsMultipart(params *sdk.ImageEditParams) bool {
 		return true
 	}
 	return false
+}
+
+func (p *Provider) requestHeaders(ctx context.Context) map[string]string {
+	return utils.RequestHeaders(ctx, utils.AuthHeader(p.apiKey), p.headers)
 }

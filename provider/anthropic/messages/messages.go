@@ -171,11 +171,12 @@ func WithHTTPClient(client *http.Client) Option {
 	}
 }
 
-// WithHeaders sets additional HTTP headers for requests.
+// WithHeaders sets provider-wide HTTP headers, overriding defaults. The map is
+// copied when the option is created. Use sdk.WithRequestHeaders for call-scoped
+// values such as session IDs; those take precedence over these headers.
 func WithHeaders(headers map[string]string) Option {
-	return func(p *Provider) {
-		p.headers = headers
-	}
+	headers = utils.MergeHeaders(headers)
+	return func(p *Provider) { p.headers = headers }
 }
 
 // WithThinking enables extended thinking for all requests made by this provider
@@ -284,7 +285,7 @@ func (p *Provider) ListModels(ctx context.Context) ([]sdk.Model, error) {
 		Method:  http.MethodGet,
 		BaseURL: p.baseURL,
 		Path:    "/models",
-		Headers: p.requestHeaders(),
+		Headers: p.requestHeaders(ctx),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: list models request failed: %w", err)
@@ -308,7 +309,7 @@ func (p *Provider) Test(ctx context.Context) *sdk.ProviderTestResult {
 		BaseURL: p.baseURL,
 		Path:    "/models",
 		Query:   map[string]string{"limit": "1"},
-		Headers: p.requestHeaders(),
+		Headers: p.requestHeaders(ctx),
 	})
 	if err != nil {
 		return classifyError(err)
@@ -321,7 +322,7 @@ func (p *Provider) TestModel(ctx context.Context, modelID string) (*sdk.ModelTes
 		Method:  http.MethodGet,
 		BaseURL: p.baseURL,
 		Path:    "/models/" + modelID,
-		Headers: p.requestHeaders(),
+		Headers: p.requestHeaders(ctx),
 	})
 	if err == nil {
 		return &sdk.ModelTestResult{Supported: true, Message: "supported"}, nil
@@ -335,7 +336,7 @@ func (p *Provider) TestModel(ctx context.Context, modelID string) (*sdk.ModelTes
 		Method:  http.MethodPost,
 		BaseURL: p.baseURL,
 		Path:    "/messages",
-		Headers: p.requestHeaders(),
+		Headers: p.requestHeaders(ctx),
 		Body: map[string]any{
 			"model":      modelID,
 			"messages":   []map[string]string{{"role": "user", "content": "hi"}},
@@ -356,7 +357,7 @@ func (p *Provider) ChatModel(id string) *sdk.Model {
 	}
 }
 
-func (p *Provider) requestHeaders() map[string]string {
+func (p *Provider) requestHeaders(ctx context.Context) map[string]string {
 	h := map[string]string{
 		"anthropic-version": defaultAnthropicVer,
 		"Content-Type":      "application/json",
@@ -366,10 +367,7 @@ func (p *Provider) requestHeaders() map[string]string {
 	} else if p.apiKey != "" {
 		h["x-api-key"] = p.apiKey
 	}
-	for k, v := range p.headers {
-		h[k] = v
-	}
-	return h
+	return utils.RequestHeaders(ctx, h, p.headers)
 }
 
 // ---------- DoGenerate ----------
@@ -388,7 +386,7 @@ func (p *Provider) DoGenerate(ctx context.Context, req sdk.Request) (sdk.ModelRe
 		Method:  http.MethodPost,
 		BaseURL: p.baseURL,
 		Path:    "/messages",
-		Headers: p.requestHeaders(),
+		Headers: p.requestHeaders(ctx),
 		Body:    body,
 	})
 	if err != nil {
@@ -869,7 +867,7 @@ func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.St
 			Method:  http.MethodPost,
 			BaseURL: p.baseURL,
 			Path:    "/messages",
-			Headers: p.requestHeaders(),
+			Headers: p.requestHeaders(ctx),
 			Body:    body,
 		}, h.handleEvent)
 

@@ -31,8 +31,10 @@ func (p *Provider) doEditMultipart(ctx context.Context, params *sdk.ImageEditPar
 	if err != nil {
 		return nil, fmt.Errorf("openai images: create request: %w", err)
 	}
+	for key, value := range p.requestHeaders(ctx) {
+		req.Header.Set(key, value)
+	}
 	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("Authorization", utils.BearerToken(p.apiKey))
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {

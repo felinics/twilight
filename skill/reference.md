@@ -11,6 +11,7 @@ Use it when the task needs exact package names, exported types, function signatu
 - `github.com/felinics/twilight/provider/openai/responses`
 - `github.com/felinics/twilight/provider/anthropic/messages`
 - `github.com/felinics/twilight/provider/google/generativeai`
+- `github.com/felinics/twilight/provider/opencode/go`
 - `github.com/felinics/twilight/provider/openai/codex`
 - `github.com/felinics/twilight/provider/openai/images`
 - `github.com/felinics/twilight/provider/openai/embedding`
@@ -44,6 +45,22 @@ Behavior notes:
 - `Generate` and `Stream` are one model call each. A runtime runs the returned
   `ToolCalls` and appends the step's assistant and tool messages to the next
   `Request`.
+
+### Request Headers
+
+```go
+func WithRequestHeaders(ctx context.Context, headers map[string]string) context.Context
+```
+
+Returns a child context with a snapshot of the supplied HTTP headers. Names are
+case-insensitive; new values override inherited context values. Supported by
+Anthropic Messages, all OpenAI providers, Google Generative AI, GitHub Copilot
+and OpenCode Go. Use it for generation, streaming, model discovery and probes.
+Each conversation should use its own context for session IDs.
+
+Precedence: protocol defaults, provider `WithHeaders`, request-context headers.
+Required SSE headers, multipart boundaries and AWS signing are applied last.
+See [Custom HTTP Headers](../docs/providers.md#custom-http-headers) for usage.
 
 ### Provider Contracts
 
@@ -693,6 +710,7 @@ type Option func(*Provider)
 func WithAPIKey(apiKey string) Option
 func WithBaseURL(baseURL string) Option
 func WithHTTPClient(client *http.Client) Option
+func WithHeaders(headers map[string]string) Option
 func WithMessageRoleCapabilities(capabilities sdk.MessageRoleCapabilities) Option
 func WithDeepSeekChatCompletionsCompat() Option
 func New(options ...Option) *Provider
@@ -732,6 +750,7 @@ type Option func(*Provider)
 func WithAPIKey(apiKey string) Option
 func WithBaseURL(baseURL string) Option
 func WithHTTPClient(client *http.Client) Option
+func WithHeaders(headers map[string]string) Option
 func New(options ...Option) *Provider
 
 func (p *Provider) Name() string
@@ -787,6 +806,7 @@ func WithAccountID(accountID string) Option
 func WithOriginator(originator string) Option
 func WithBaseURL(baseURL string) Option
 func WithHTTPClient(client *http.Client) Option
+func WithHeaders(headers map[string]string) Option
 func New(options ...Option) *Provider
 
 func (p *Provider) Name() string
@@ -883,6 +903,7 @@ type Option func(*Provider)
 func WithAPIKey(apiKey string) Option
 func WithBaseURL(baseURL string) Option
 func WithHTTPClient(client *http.Client) Option
+func WithHeaders(headers map[string]string) Option
 func New(options ...Option) *Provider
 
 func (p *Provider) Name() string
@@ -922,6 +943,7 @@ type Option func(*Provider)
 func WithAPIKey(apiKey string) Option
 func WithBaseURL(baseURL string) Option
 func WithHTTPClient(client *http.Client) Option
+func WithHeaders(headers map[string]string) Option
 func New(options ...Option) *Provider
 
 func (p *Provider) EmbeddingModel(id string) *sdk.EmbeddingModel
@@ -991,6 +1013,7 @@ type Option func(*Provider)
 func WithAPIKey(apiKey string) Option
 func WithBaseURL(baseURL string) Option
 func WithHTTPClient(client *http.Client) Option
+func WithHeaders(headers map[string]string) Option
 func New(options ...Option) *Provider
 
 func (p *Provider) GenerationModel(id string) *sdk.ImageGenerationModel
@@ -1024,3 +1047,56 @@ Edit behavior:
 - OpenAI image generation and editing (dall-e, gpt-image): `provider/openai/images`
 - OpenAI-compatible embeddings: `provider/openai/embedding`
 - Gemini embeddings with task-type tuning: `provider/google/embedding`
+
+---
+
+## Package `provider/opencode/go`
+
+Package name: `opencodego`. Implements `sdk.Provider` by routing each model to
+Chat Completions, Responses or Anthropic Messages.
+
+```go
+type Protocol string
+const (
+    ProtocolCompletions Protocol = "openai-completions"
+    ProtocolResponses   Protocol = "openai-responses"
+    ProtocolMessages    Protocol = "anthropic-messages"
+)
+const SessionHeader = "x-opencode-session"
+
+type ModelDescriptor struct {
+    ID          string
+    DisplayName string
+    Protocol    Protocol
+}
+func Catalog() []ModelDescriptor
+
+type Option func(*Provider)
+func WithAPIKey(apiKey string) Option
+func WithBaseURL(baseURL string) Option
+func WithHTTPClient(client *http.Client) Option
+func WithHeaders(headers map[string]string) Option
+func WithModelProtocols(protocols map[string]Protocol) Option
+func New(options ...Option) *Provider
+
+func (p *Provider) Name() string // "opencode-go"
+func (p *Provider) ChatModel(id string) *sdk.Model
+func (p *Provider) ProtocolForModel(id string) (Protocol, error)
+func (p *Provider) ListModels(ctx context.Context) ([]sdk.Model, error)
+func (p *Provider) Test(ctx context.Context) *sdk.ProviderTestResult
+func (p *Provider) TestModel(ctx context.Context, modelID string) (*sdk.ModelTestResult, error)
+func (p *Provider) DoGenerate(ctx context.Context, req sdk.Request) (sdk.ModelResult, error)
+func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.StreamPart, error)
+```
+
+Default base URL: `https://opencode.ai/zen/go/v1`. Supply your application's
+User-Agent and a stable conversation ID through `sdk.WithRequestHeaders(ctx,
+map[string]string{opencodego.SessionHeader: conversationID})`.
+
+`Catalog` is the documented routing directory; `ListModels` is the live upstream
+list and may contain models without a local route. `ProtocolForModel` returns an
+error for an unknown model or invalid protocol. Register routes explicitly with
+`WithModelProtocols`; names and prefixes are never used to guess a protocol.
+`Test` checks only public catalog reachability. `TestModel` performs a small,
+potentially billable generation request and requires the same request context as
+normal generation. See [OpenCode Go](../docs/providers.md#opencode-go-provider).

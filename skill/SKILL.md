@@ -28,6 +28,7 @@ Twilight AI is a lightweight Go AI SDK with a provider-agnostic core API.
   - `provider/openai/completions`
   - `provider/openai/responses`
   - `provider/openai/codex`
+  - `provider/opencode/go`
   - `provider/openai/images`
   - `provider/anthropic/messages`
   - `provider/google/generativeai`
@@ -67,6 +68,7 @@ If the task introduces examples or docs, prefer simple end-to-end snippets that 
 - Use `openai/completions` for broad OpenAI-compatible support such as DeepSeek, Groq, Ollama, Azure-style compatible endpoints, and generic `/chat/completions` backends.
 - Use `openai/responses` when the task needs OpenAI Responses API features such as first-class reasoning models, reasoning summaries, URL citation annotations, or flat input mapping.
 - Use `openai/codex` when the task needs OpenAI Codex coding agent models (gpt-5.x-codex series) with ChatGPT access token authentication and encrypted reasoning content.
+- Use `opencode/go` for OpenCode Go: explicit per-model protocol routing, an application User-Agent, and a stable caller-owned session ID via `sdk.WithRequestHeaders`.
 - Use `anthropic/messages` for Claude and Anthropic extended thinking via `WithThinking`.
 - Use `google/generativeai` for Gemini chat, tool calling, vision, streaming, and Gemini reasoning.
 - Use `openai/images` for image generation (dall-e-2, dall-e-3, gpt-image-1) and image editing via the OpenAI Images API.

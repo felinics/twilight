@@ -80,6 +80,31 @@ fmt.Println(result.Text)
 
 The Responses API is OpenAI's newer API with first-class support for reasoning models (o3, o4-mini), URL citation annotations, and a flat input format. See [Providers](docs/providers.md) for details.
 
+### OpenCode Go
+
+```go
+import opencodego "github.com/felinics/twilight/provider/opencode/go"
+
+provider := opencodego.New(
+    opencodego.WithAPIKey("your-opencode-go-key"),
+    opencodego.WithHeaders(map[string]string{"User-Agent": "my-agent/1.0"}),
+)
+ctx := sdk.WithRequestHeaders(context.Background(), map[string]string{
+    opencodego.SessionHeader: conversationID, // stable across turns and tool calls
+})
+result, err := provider.ChatModel("glm-5.2").Generate(ctx, sdk.Request{
+    Messages: []sdk.Message{sdk.UserMessage("Explain this code")},
+})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(result.Text)
+```
+
+Models route to Completions, Responses or Messages using an explicit catalog.
+See [OpenCode Go](docs/providers.md#opencode-go-provider) for model discovery,
+route overrides and session handling.
+
 ### Anthropic
 
 ```go
@@ -404,6 +429,7 @@ if testResult.Supported {
 | OpenAI Codex | `codex.New()` | `/codex/responses` | ✅ Stable |
 | OpenAI-compatible (DeepSeek, Groq, etc.) | `completions.New()` + `WithBaseURL` | `/chat/completions` | ✅ Stable |
 | OpenRouter Responses | `responses.New()` + `WithBaseURL` | `/responses` | ✅ Stable |
+| OpenCode Go | `opencodego.New()` | Per-model Completions / Responses / Messages | New |
 | Anthropic | `messages.New()` | `/messages` | ✅ Stable |
 | Google Gemini | `generativeai.New()` | Generative AI API | ✅ Stable |
 | OpenAI Images | `images.New()` | `/images/generations`, `/images/edits` | ✅ Stable |

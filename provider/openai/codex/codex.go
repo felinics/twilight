@@ -20,6 +20,7 @@ const (
 )
 
 type Provider struct {
+	headers     map[string]string
 	accessToken string
 	accountID   string
 	originator  string
@@ -31,6 +32,14 @@ type Option func(*Provider)
 
 func WithAccessToken(token string) Option {
 	return func(p *Provider) { p.accessToken = token }
+}
+
+// WithHeaders sets provider-wide HTTP headers, overriding defaults. The map is
+// copied when the option is created. Use sdk.WithRequestHeaders for call-scoped
+// values such as session IDs; those take precedence over these headers.
+func WithHeaders(headers map[string]string) Option {
+	headers = utils.MergeHeaders(headers)
+	return func(p *Provider) { p.headers = headers }
 }
 
 // WithAPIKey is an alias for WithAccessToken to make migration from other
@@ -106,7 +115,7 @@ func (p *Provider) TestModel(ctx context.Context, modelID string) (*sdk.ModelTes
 		Method:  http.MethodPost,
 		BaseURL: p.baseURL,
 		Path:    "/codex/responses",
-		Headers: p.authHeaders(),
+		Headers: p.requestHeaders(ctx),
 		Body:    req,
 	})
 	if err != nil {
@@ -203,7 +212,7 @@ func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.St
 			Method:  http.MethodPost,
 			BaseURL: p.baseURL,
 			Path:    "/codex/responses",
-			Headers: p.authHeaders(),
+			Headers: p.requestHeaders(ctx),
 			Body:    out,
 		}, func(ev *utils.SSEEvent) error {
 			switch ev.Event {
@@ -588,7 +597,7 @@ func convertCodexToolResults(msg sdk.Message) []json.RawMessage {
 	return items
 }
 
-func (p *Provider) authHeaders() map[string]string {
+func (p *Provider) requestHeaders(ctx context.Context) map[string]string {
 	accountID := p.accountID
 	if accountID == "" {
 		accountID, _ = accountIDFromToken(p.accessToken)
@@ -602,7 +611,7 @@ func (p *Provider) authHeaders() map[string]string {
 	if accountID != "" {
 		headers[openAIAccountHeader] = accountID
 	}
-	return headers
+	return utils.RequestHeaders(ctx, headers, p.headers)
 }
 
 func mapCodexFinishReason(incompleteReason string, hasFunctionCall bool) sdk.FinishReason {
