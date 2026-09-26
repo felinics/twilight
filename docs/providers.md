@@ -272,6 +272,57 @@ provider := completions.New(
 )
 ```
 
+## Moonshot File Extraction
+
+Moonshot's PDF and document question-answering flow is separate from Chat
+Completions file content parts. The package implements the transport portion of
+the [official Kimi file-based QA flow](https://platform.kimi.com/docs/guide/use-kimi-api-for-file-based-qa):
+upload the document with `purpose=file-extract`, read the extracted text, add
+that text to the model context, and delete the remote file when it is no longer
+needed.
+
+```go
+import (
+    "context"
+    "os"
+
+    moonshotfiles "github.com/memohai/twilight-ai/provider/moonshot/files"
+)
+
+client := moonshotfiles.New(
+    moonshotfiles.WithAPIKey(os.Getenv("MOONSHOT_API_KEY")),
+)
+
+document, err := os.Open("report.pdf")
+if err != nil {
+    return err
+}
+defer document.Close()
+
+uploaded, err := client.UploadForExtraction(
+    context.Background(),
+    document,
+    "report.pdf",
+    "application/pdf",
+)
+if err != nil {
+    return err
+}
+defer client.Delete(context.Background(), uploaded.ID) // handle the error in production
+
+content, err := client.Content(context.Background(), uploaded.ID)
+if err != nil {
+    return err
+}
+// Add content, not uploaded.ID, to the model context.
+```
+
+`Upload` accepts an `io.Reader` and streams the multipart body, so callers do
+not need to buffer a large document. `OpenContent` provides the same streaming
+control for extracted text. The package deliberately does not modify the Kimi
+Chat Completions adapter: upload caching, context budgeting, trust boundaries,
+and cleanup policy belong to the application orchestrating file-based QA.
+
 ## OpenAI Responses Provider
 
 The `provider/openai/responses` package provides an implementation for the OpenAI Responses API (`/responses`). This is OpenAI's newer API that offers first-class reasoning support, URL citation annotations, and a flat input format.
