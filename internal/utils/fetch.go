@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 type RequestOptions struct {
@@ -18,6 +19,9 @@ type RequestOptions struct {
 	Query   map[string]string
 	Body    any
 	Prepare func(*http.Request) error
+	// Retry, when set, retries the request per the policy. Leaving it nil sends
+	// the request exactly once.
+	Retry *RetryPolicy
 }
 
 type APIError struct {
@@ -96,6 +100,53 @@ func BuildRequest(ctx context.Context, opts *RequestOptions) (*http.Request, err
 	return req, nil
 }
 
+// send builds and sends the request, retrying per opts.Retry. It returns the
+// last response whatever its status, so callers keep their own error mapping.
+// With no policy it is a single build-and-send, which is what every provider
+// that does not opt in gets.
+func send(ctx context.Context, client *http.Client, opts *RequestOptions) (*http.Response, error) {
+	attempts := opts.Retry.attempts()
+	var (
+		retryAfter    time.Duration
+		hasRetryAfter bool
+	)
+
+	for attempt := 1; ; attempt++ {
+		// Rebuild every attempt: Prepare may sign the request, and a signature
+		// carries a timestamp that must not be replayed.
+		req, err := BuildRequest(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+
+		resp, err := client.Do(req)
+		last := attempt >= attempts
+		switch {
+		case err != nil:
+			if last || ctx.Err() != nil || !opts.Retry.shouldRetryTransportError(err) {
+				return nil, fmt.Errorf("request failed: %w", err)
+			}
+			retryAfter, hasRetryAfter = 0, false
+		case resp.StatusCode >= 200 && resp.StatusCode < 300:
+			return resp, nil
+		case last || !opts.Retry.shouldRetryStatus(resp.StatusCode):
+			return resp, nil
+		default:
+			retryAfter, hasRetryAfter = parseRetryAfter(resp.Header, time.Now())
+			drainAndClose(resp)
+		}
+
+		if err := sleep(ctx, opts.Retry.backoff(attempt, retryAfter, hasRetryAfter)); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func drainAndClose(resp *http.Response) {
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+}
+
 // FetchJSON sends a JSON request and decodes the response into type T.
 // Non-2xx responses are returned as *APIError.
 func FetchJSON[T any](ctx context.Context, client *http.Client, opts *RequestOptions) (*T, error) {
@@ -106,14 +157,9 @@ func FetchJSON[T any](ctx context.Context, client *http.Client, opts *RequestOpt
 		opts.Headers["Accept"] = "application/json"
 	}
 
-	req, err := BuildRequest(ctx, opts)
+	resp, err := send(ctx, client, opts)
 	if err != nil {
 		return nil, err
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -132,14 +178,9 @@ func FetchJSON[T any](ctx context.Context, client *http.Client, opts *RequestOpt
 // The caller is responsible for closing the response body.
 // Non-2xx responses are returned as *APIError (body already closed).
 func FetchRaw(ctx context.Context, client *http.Client, opts *RequestOptions) (*http.Response, error) {
-	req, err := BuildRequest(ctx, opts)
+	resp, err := send(ctx, client, opts)
 	if err != nil {
 		return nil, err
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -154,16 +195,11 @@ func FetchRaw(ctx context.Context, client *http.Client, opts *RequestOptions) (*
 // The response body is always drained and closed. This is useful for
 // lightweight endpoint probes where only reachability matters.
 func ProbeStatus(ctx context.Context, client *http.Client, opts *RequestOptions) (int, error) {
-	req, err := BuildRequest(ctx, opts)
+	resp, err := send(ctx, client, opts)
 	if err != nil {
 		return 0, err
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("request failed: %w", err)
-	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	_ = resp.Body.Close()
+	drainAndClose(resp)
 	return resp.StatusCode, nil
 }
 
