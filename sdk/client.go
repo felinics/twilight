@@ -37,6 +37,12 @@ func Transcribe(ctx context.Context, options ...TranscriptionOption) (*Transcrip
 	return defaultClient.Transcribe(ctx, options...)
 }
 
+// --- Evaluation convenience functions ---
+
+func Evaluate(ctx context.Context, options ...EvaluateOption) (*EvaluateResult, error) {
+	return defaultClient.Evaluate(ctx, options...)
+}
+
 // --- Image convenience functions ---
 
 func GenerateImage(ctx context.Context, options ...ImageGenerateOption) (*ImageResult, error) {
