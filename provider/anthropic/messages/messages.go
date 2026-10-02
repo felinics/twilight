@@ -15,6 +15,11 @@ import (
 )
 
 const (
+	pathMessages = "/messages"
+	roleUser     = "user"
+)
+
+const (
 	defaultBaseURL      = "https://api.anthropic.com/v1"
 	defaultAnthropicVer = "2023-06-01"
 	defaultMaxTokens    = 4096
@@ -334,11 +339,11 @@ func (p *Provider) TestModel(ctx context.Context, modelID string) (*sdk.ModelTes
 	status, probeErr := utils.ProbeStatus(ctx, p.httpClient, &utils.RequestOptions{
 		Method:  http.MethodPost,
 		BaseURL: p.baseURL,
-		Path:    "/messages",
+		Path:    pathMessages,
 		Headers: p.requestHeaders(),
 		Body: map[string]any{
 			"model":      modelID,
-			"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+			"messages":   []map[string]string{{"role": roleUser, "content": "hi"}},
 			"max_tokens": 1,
 		},
 	})
@@ -387,7 +392,7 @@ func (p *Provider) DoGenerate(ctx context.Context, req sdk.Request) (sdk.ModelRe
 	resp, err := utils.FetchJSON[messagesResponse](ctx, p.httpClient, &utils.RequestOptions{
 		Method:  http.MethodPost,
 		BaseURL: p.baseURL,
-		Path:    "/messages",
+		Path:    pathMessages,
 		Headers: p.requestHeaders(),
 		Body:    body,
 	})
@@ -588,12 +593,12 @@ func convertSystemContent(parts []sdk.MessagePart) []contentBlock {
 // appendUserBlocks appends content blocks to the last user message if it exists,
 // or creates a new user message.
 func appendUserBlocks(messages []anthropicMessage, blocks []contentBlock) []anthropicMessage {
-	if len(messages) > 0 && messages[len(messages)-1].Role == "user" {
+	if len(messages) > 0 && messages[len(messages)-1].Role == roleUser {
 		messages[len(messages)-1].Content = append(messages[len(messages)-1].Content, blocks...)
 		return messages
 	}
 	return append(messages, anthropicMessage{
-		Role:    "user",
+		Role:    roleUser,
 		Content: blocks,
 	})
 }
@@ -868,7 +873,7 @@ func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.St
 		err := utils.FetchSSE(ctx, p.httpClient, &utils.RequestOptions{
 			Method:  http.MethodPost,
 			BaseURL: p.baseURL,
-			Path:    "/messages",
+			Path:    pathMessages,
 			Headers: p.requestHeaders(),
 			Body:    body,
 		}, h.handleEvent)

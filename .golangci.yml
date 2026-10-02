@@ -4,6 +4,7 @@ linters:
   default: standard
   enable:
     - bodyclose
+    - depguard
     - errcheck
     - errname
     - errorlint
@@ -26,6 +27,19 @@ linters:
     - err113
 
   settings:
+    depguard:
+      rules:
+        # agentcore is the protocol kernel: it depends on neither the SDK
+        # nor the agent built on it. Test code may use both.
+        agentcore:
+          files:
+            - "**/agentcore/**"
+            - "!$test"
+          deny:
+            - pkg: github.com/felinics/twilight/sdk
+              desc: agentcore does not import the SDK; convert in agent/sdkconv
+            - pkg: github.com/felinics/twilight/agent/
+              desc: agentcore does not import the agent built on it
     errcheck:
       check-type-assertions: true
     goconst:
@@ -36,6 +50,16 @@ linters:
         - diagnostic
         - performance
         - style
+      settings:
+        hugeParam:
+          # Identity-carrying protocol values (AssignmentKey, Schema,
+          # Assignment, artifact.Ref, session.Commit with its Ext slot) are
+          # 80-128 bytes of string headers and are passed by value on purpose
+          # so a callee cannot mutate the caller's copy. Only genuinely large
+          # values are worth a pointer.
+          sizeThreshold: 136
+        rangeValCopy:
+          sizeThreshold: 136
     gocyclo:
       min-complexity: 40
     nakedret:
@@ -58,14 +82,18 @@ linters:
           - gocritic
           - unparam
           - prealloc
-      # providertest is test infrastructure shared by the provider packages.
-      - path: ^provider/providertest/
+          - gocyclo
+      # Conformance harnesses are test code compiled into non-_test files so
+      # adapters can import them; they get the test exclusions.
+      - path: ^(agentcore/artifact/artifacttest|agentcore/checkpoint/checkpointtest|agentcore/executor/store/storetest|agentcore/inbox/inboxtest|agentcore/run/redispatch/redispatchtest|agentcore/run/sessionstore/storetest|agentcore/session/sessiontest|agentcore/runtime/runtimetest|provider/providertest)/
         linters:
           - errcheck
           - gosec
           - goconst
           - gocritic
           - unparam
+          - gocyclo
+          - prealloc
 
 run:
   timeout: 5m

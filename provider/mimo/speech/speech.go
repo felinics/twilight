@@ -100,7 +100,7 @@ func (p *Provider) DoStream(ctx context.Context, params sdk.SpeechParams) (*sdk.
 		modelID = strings.TrimSpace(params.Model.ID)
 	}
 	cfg := parseConfig(params.Config)
-	cfg.Format = "pcm16"
+	cfg.Format = formatPCM16
 
 	resp, err := p.doRequest(ctx, p.buildRequest(modelID, params.Text, cfg, true))
 	if err != nil {

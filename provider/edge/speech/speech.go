@@ -35,11 +35,6 @@ func New(opts ...Option) *Provider {
 	return p
 }
 
-// newWithClient creates a provider with a custom client (for testing).
-func newWithClient(client *edgeWsClient) *Provider {
-	return &Provider{client: client}
-}
-
 // SpeechModel creates a SpeechModel bound to this provider.
 func (p *Provider) SpeechModel(id string) *sdk.SpeechModel {
 	if id == "" {

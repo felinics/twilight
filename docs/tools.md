@@ -62,6 +62,8 @@ type ToolOutput struct {
 
 `args.Unmarshal(&v)` decodes the document into your type; it returns `ErrInvalidToolArguments` when the model's text was not a JSON document. `sdk.TextOutput(s)`, `sdk.JSONOutput(v)` and `sdk.RawJSONOutput(raw)` build outputs.
 
+The JSON the SDK keeps is canonical in the sense of RFC 8785 (JCS): `ParseToolArguments`, `ToolArgumentsJSON`, `JSONOutput` and `RawJSONOutput` re-encode the document with object members sorted, no insignificant whitespace and numbers in their IEEE-754 binary64 form (`sdk.CanonicalJSON` is the rule; `sdk.CanonicalProviderOptions` applies it to `Request.ProviderOptions`). Two spellings of the same document give the same bytes in every language that implements RFC 8785, and `json.Marshal` of a `Request` built this way is deterministic, so a digest over it needs no further normalization. Numbers have binary64 semantics: `2.0` becomes `2`, and an identifier that must stay exact belongs in a JSON string, not a number. An object with a repeated member is not accepted: `ParseToolArguments` keeps such text as invalid arguments and `RawJSONOutput` returns `ErrInvalidJSON`.
+
 A model sometimes emits arguments that are not valid JSON (a truncated call, for example). Such a call is still reported, with the text in `Text` and `Valid()` false, so you can answer it with an error result and let the model correct itself instead of running the tool on guessed arguments.
 
 ## One Model Call

@@ -1,5 +1,9 @@
 # Streaming
 
+> **Deprecated:** `sdk.StreamText` and `sdk.StreamResult` run an SDK-owned step
+> loop. `sdk.Client.Stream` returns a `sdk.ModelStream` of `sdk.StreamPart`
+> values, which the caller assembles and accumulates itself.
+
 Twilight AI uses Go channels for streaming, giving you type-safe, idiomatic control over real-time LLM output.
 
 ## Basic Streaming

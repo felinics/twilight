@@ -244,7 +244,7 @@ type Request struct {
     ReasoningEffort  *string
     ReasoningSummary *string
     PromptCacheKey   *string
-    ProviderOptions  map[string]json.RawMessage  // keyed by Provider.Name(); each provider decodes its own entry
+    ProviderOptions  map[string]json.RawMessage  // keyed by Provider.Name(); each provider decodes its own entry; CanonicalProviderOptions puts the values in canonical form
 }
 ```
 
@@ -291,8 +291,8 @@ type ToolArguments struct {
     Text string          // the model's text when it was not a JSON document
 }
 
-func ParseToolArguments(text string) ToolArguments        // classifies provider text; "" is the empty object
-func ToolArgumentsJSON(v any) (ToolArguments, error)      // encodes v
+func ParseToolArguments(text string) ToolArguments        // classifies provider text; "" is the empty object; a document is kept canonical
+func ToolArgumentsJSON(v any) (ToolArguments, error)      // encodes v in canonical form
 func (a ToolArguments) Valid() bool                        // a document (the zero value counts as {})
 func (a ToolArguments) Unmarshal(v any) error              // ErrInvalidToolArguments when not Valid
 func (a ToolArguments) String() string                     // the text as the model produced it
@@ -304,10 +304,17 @@ type ToolOutput struct {
 }
 
 func TextOutput(text string) ToolOutput
-func JSONOutput(v any) (ToolOutput, error)
-func RawJSONOutput(raw json.RawMessage) ToolOutput
+func JSONOutput(v any) (ToolOutput, error)                 // encodes v in canonical form
+func RawJSONOutput(raw json.RawMessage) (ToolOutput, error) // re-encodes raw in canonical form; ErrInvalidJSON otherwise
 func (o ToolOutput) String() string
 func (o ToolOutput) IsJSON() bool
+
+// Canonical form: the JSON the SDK carries through (tool arguments, tool
+// outputs, provider options) is re-encoded as RFC 8785 (JCS), so equal
+// documents are equal bytes and json.Marshal(Request) is deterministic.
+func CanonicalJSON(raw []byte) (json.RawMessage, error)   // RFC 8785; numbers in binary64 form; ErrInvalidJSON for anything but one document (a repeated member or an escaped lone surrogate included)
+func CanonicalProviderOptions(options map[string]json.RawMessage) (map[string]json.RawMessage, error)
+var ErrInvalidJSON error
 
 type ProviderMetadata map[string]map[string]string  // namespace → key → opaque token
 
