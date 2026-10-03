@@ -14,6 +14,14 @@ import (
 	"github.com/felinics/twilight/sdk"
 )
 
+const (
+	pathChatCompletions = "/chat/completions"
+	thinkingDisabled    = "disabled"
+	toolTypeFunction    = "function"
+	keyType             = "type"
+	roleAssistant       = "assistant"
+)
+
 const defaultBaseURL = "https://api.openai.com/v1"
 
 type Provider struct {

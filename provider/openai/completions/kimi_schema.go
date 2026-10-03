@@ -165,7 +165,7 @@ func normalizeKimiSchemaMap(schema map[string]any, path string) error {
 }
 
 func normalizeKimiAnyOf(schema map[string]any, anyOf []any, path string) error {
-	rawParentType, hasParentType := schema["type"]
+	rawParentType, hasParentType := schema[keyType]
 	if !hasParentType {
 		return nil
 	}
@@ -187,7 +187,7 @@ func normalizeKimiAnyOf(schema map[string]any, anyOf []any, path string) error {
 		if !ok {
 			return fmt.Errorf("%s.anyOf[%d]: boolean schemas are not supported", path, index)
 		}
-		if rawBranchType, exists := branch["type"]; exists {
+		if rawBranchType, exists := branch[keyType]; exists {
 			branchType, ok := rawBranchType.(string)
 			if !ok || branchType != parentType {
 				return fmt.Errorf(
@@ -199,10 +199,10 @@ func normalizeKimiAnyOf(schema map[string]any, anyOf []any, path string) error {
 				)
 			}
 		} else {
-			branch["type"] = parentType
+			branch[keyType] = parentType
 		}
 	}
-	delete(schema, "type")
+	delete(schema, keyType)
 	return nil
 }
 
@@ -245,15 +245,20 @@ func distributeKimiObjectBundle(schema map[string]any, anyOf []any, path string)
 			return fmt.Errorf("%s: boolean schemas are not supported", branchPath)
 		}
 		for key := range branch {
-			if key == "type" || key == "required" || isSchemaAnnotationKeyword(key) {
+			if key == keyType || key == "required" || isSchemaAnnotationKeyword(key) {
 				continue
 			}
 			return fmt.Errorf("%s.%s: cannot safely merge this keyword with parent object constraints", branchPath, key)
 		}
-		if rawBranchType, exists := branch["type"]; exists {
+		if rawBranchType, exists := branch[keyType]; exists {
 			branchType, ok := rawBranchType.(string)
+<<<<<<< HEAD
 			if !ok || branchType != kimiObjectType {
 				return fmt.Errorf("%s.type: %v conflicts with parent type %q", branchPath, rawBranchType, kimiObjectType)
+=======
+			if !ok || branchType != schemaTypeObject {
+				return fmt.Errorf("%s.type: %v conflicts with parent type %q", branchPath, rawBranchType, schemaTypeObject)
+>>>>>>> d8dc29d6 (agent: add storage, workspace, and model adapters)
 			}
 		}
 		branchRequired, err := schemaStringArray(branch["required"], branchPath+".required")
@@ -265,7 +270,11 @@ func distributeKimiObjectBundle(schema map[string]any, anyOf []any, path string)
 			return err
 		}
 
+<<<<<<< HEAD
 		branch["type"] = kimiObjectType
+=======
+		branch[keyType] = schemaTypeObject
+>>>>>>> d8dc29d6 (agent: add storage, workspace, and model adapters)
 		branch["properties"] = cloneJSONValue(properties)
 		if hasAdditional {
 			branch["additionalProperties"] = rawAdditional
@@ -281,7 +290,7 @@ func distributeKimiObjectBundle(schema map[string]any, anyOf []any, path string)
 		}
 	}
 
-	delete(schema, "type")
+	delete(schema, keyType)
 	delete(schema, "properties")
 	delete(schema, "required")
 	delete(schema, "additionalProperties")
@@ -299,7 +308,7 @@ func hasAnySchemaKeyword(schema map[string]any, keys ...string) bool {
 
 func isKimiObjectBundleKeyword(key string) bool {
 	switch key {
-	case "type", "properties", "required", "additionalProperties", "anyOf":
+	case keyType, "properties", "required", "additionalProperties", "anyOf":
 		return true
 	default:
 		return false
