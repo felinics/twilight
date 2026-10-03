@@ -902,24 +902,32 @@ func convertResponsesUsage(u *responsesUsage) sdk.Usage {
 	inputTokens := u.InputTokens
 	outputTokens := u.OutputTokens
 	cachedTokens := 0
+	cacheWriteTokens := 0
+	cacheReported := false
 	reasoningTokens := 0
 
 	if u.InputTokensDetails != nil {
-		cachedTokens = u.InputTokensDetails.CachedTokens
+		if u.InputTokensDetails.CachedTokens != nil {
+			cachedTokens = *u.InputTokensDetails.CachedTokens
+			cacheReported = true
+		}
+		cacheWriteTokens = u.InputTokensDetails.CacheWriteTokens
 	}
 	if u.OutputTokensDetails != nil {
 		reasoningTokens = u.OutputTokensDetails.ReasoningTokens
 	}
 
 	return sdk.Usage{
-		InputTokens:       inputTokens,
-		OutputTokens:      outputTokens,
-		TotalTokens:       inputTokens + outputTokens,
-		ReasoningTokens:   reasoningTokens,
-		CachedInputTokens: cachedTokens,
+		InputTokens:             inputTokens,
+		OutputTokens:            outputTokens,
+		TotalTokens:             inputTokens + outputTokens,
+		ReasoningTokens:         reasoningTokens,
+		CachedInputTokens:       cachedTokens,
+		CacheReadTokensReported: cacheReported,
 		InputTokenDetails: sdk.InputTokenDetail{
-			CacheReadTokens: cachedTokens,
-			NoCacheTokens:   inputTokens - cachedTokens,
+			CacheReadTokens:  cachedTokens,
+			CacheWriteTokens: cacheWriteTokens,
+			NoCacheTokens:    inputTokens - cachedTokens - cacheWriteTokens,
 		},
 		OutputTokenDetails: sdk.OutputTokenDetail{
 			ReasoningTokens: reasoningTokens,

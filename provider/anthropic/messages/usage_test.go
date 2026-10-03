@@ -26,7 +26,7 @@ func TestUsageIncludesCachedInput(t *testing.T) {
 		{
 			name:  "cache read",
 			usage: `{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":200}`,
-			want: sdk.Usage{InputTokens: 210, OutputTokens: 5, TotalTokens: 215, CachedInputTokens: 200,
+			want: sdk.Usage{InputTokens: 210, OutputTokens: 5, TotalTokens: 215, CachedInputTokens: 200, CacheReadTokensReported: true,
 				InputTokenDetails: sdk.InputTokenDetail{NoCacheTokens: 10, CacheReadTokens: 200}},
 		},
 		{
@@ -38,13 +38,13 @@ func TestUsageIncludesCachedInput(t *testing.T) {
 		{
 			name:  "mixed cache lifetimes",
 			usage: `{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":200,"cache_creation_input_tokens":556,"cache_creation":{"ephemeral_5m_input_tokens":456,"ephemeral_1h_input_tokens":100}}`,
-			want: sdk.Usage{InputTokens: 766, OutputTokens: 5, TotalTokens: 771, CachedInputTokens: 200,
+			want: sdk.Usage{InputTokens: 766, OutputTokens: 5, TotalTokens: 771, CachedInputTokens: 200, CacheReadTokensReported: true,
 				InputTokenDetails: sdk.InputTokenDetail{NoCacheTokens: 10, CacheReadTokens: 200, CacheWriteTokens: 556, CacheWrite5mTokens: 456, CacheWrite1hTokens: 100}},
 		},
 		{
 			name:  "fully cached",
 			usage: `{"input_tokens":0,"output_tokens":5,"cache_read_input_tokens":200}`,
-			want: sdk.Usage{InputTokens: 200, OutputTokens: 5, TotalTokens: 205, CachedInputTokens: 200,
+			want: sdk.Usage{InputTokens: 200, OutputTokens: 5, TotalTokens: 205, CachedInputTokens: 200, CacheReadTokensReported: true,
 				InputTokenDetails: sdk.InputTokenDetail{CacheReadTokens: 200}},
 		},
 	}

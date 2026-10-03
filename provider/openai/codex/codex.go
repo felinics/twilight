@@ -649,18 +649,21 @@ func convertCodexUsage(u *codexUsage) sdk.Usage {
 	outputTokens := u.OutputTokens
 	cachedTokens := 0
 	reasoningTokens := 0
-	if u.InputTokensDetails != nil {
-		cachedTokens = u.InputTokensDetails.CachedTokens
+	cacheReported := false
+	if u.InputTokensDetails != nil && u.InputTokensDetails.CachedTokens != nil {
+		cachedTokens = *u.InputTokensDetails.CachedTokens
+		cacheReported = true
 	}
 	if u.OutputTokensDetails != nil {
 		reasoningTokens = u.OutputTokensDetails.ReasoningTokens
 	}
 	return sdk.Usage{
-		InputTokens:       inputTokens,
-		OutputTokens:      outputTokens,
-		TotalTokens:       inputTokens + outputTokens,
-		CachedInputTokens: cachedTokens,
-		ReasoningTokens:   reasoningTokens,
+		InputTokens:             inputTokens,
+		OutputTokens:            outputTokens,
+		TotalTokens:             inputTokens + outputTokens,
+		CachedInputTokens:       cachedTokens,
+		CacheReadTokensReported: cacheReported,
+		ReasoningTokens:         reasoningTokens,
 		InputTokenDetails: sdk.InputTokenDetail{
 			CacheReadTokens: cachedTokens,
 			NoCacheTokens:   inputTokens - cachedTokens,

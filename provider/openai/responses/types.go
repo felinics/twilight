@@ -162,7 +162,8 @@ type responsesUsage struct {
 }
 
 type responsesInputTokenDetails struct {
-	CachedTokens int `json:"cached_tokens"`
+	CachedTokens     *int `json:"cached_tokens,omitempty"`
+	CacheWriteTokens int  `json:"cache_write_tokens,omitempty"`
 }
 
 type responsesOutputTokenDetails struct {
