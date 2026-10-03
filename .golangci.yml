@@ -32,10 +32,14 @@ linters:
       min-len: 3
       min-occurrences: 3
     gocritic:
+      # Runtime contracts intentionally use immutable value objects. Changing
+      # these APIs to pointers would make the wire/value semantics inconsistent.
       enabled-tags:
         - diagnostic
         - performance
         - style
+      disabled-checks:
+        - hugeParam
     gocyclo:
       min-complexity: 40
     nakedret:
