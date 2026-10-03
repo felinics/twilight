@@ -41,6 +41,15 @@ type Factory func(t testing.TB) Fixture
 
 const sid session.SessionID = "conformance"
 
+func mustType[T any](t testing.TB, value any) T {
+	t.Helper()
+	result, ok := value.(T)
+	if !ok {
+		t.Fatalf("state has type %T, want %T", value, result)
+	}
+	return result
+}
+
 type clock struct {
 	mu  sync.Mutex
 	now time.Time
@@ -479,7 +488,7 @@ func (h *harness) machine() sessionstore.Machine {
 	if err != nil {
 		h.fatal(err)
 	}
-	return mustMachine(h.t, state)
+	return mustType[sessionstore.Machine](h.t, state)
 }
 
 func eventTypes(events []ledger.Event) []ledger.EventType {
