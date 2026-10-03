@@ -13,11 +13,23 @@ import (
 	. "github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/run/effect"
 	"github.com/felinics/twilight/agentcore/run/frozen"
+	"github.com/felinics/twilight/agentcore/run/model"
 	"github.com/felinics/twilight/agentcore/run/reconcile"
 	"github.com/felinics/twilight/agentcore/run/schema"
 	"github.com/felinics/twilight/agentcore/run/store"
 	"github.com/felinics/twilight/sdk"
 )
+
+// mustFreezeResult stands in for the backend boundary: the effect
+// protocol carries only frozen model results.
+func mustFreezeResult(t *testing.T, r sdk.ModelResult) model.ModelResult {
+	t.Helper()
+	frozen, err := sdkconv.FreezeModelResult(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return frozen
+}
 
 // recordingExecutor captures Assignments instead of executing them, so a test
 // can observe the Loop's dispatch and hand Outcomes back at will.
