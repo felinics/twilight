@@ -5,8 +5,6 @@ import (
 	"github.com/felinics/twilight/agentcore/run"
 )
 
-// inputDigest names an input body in tests. The Run stores only the digest, so
-// any content-derived digest stands in for the chatlog's input body.
-func inputDigest(raw string) run.Digest {
-	return jsonstable.DigestBytes([]byte(raw))
-}
+// inputDigest names an input body in tests: the Run stores only the digest,
+// so any content-derived digest stands in for the chatlog's.
+func inputDigest(raw string) run.Digest { return jsonstable.DigestBytes([]byte(raw)) }
