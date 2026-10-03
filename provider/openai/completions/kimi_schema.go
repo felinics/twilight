@@ -5,6 +5,8 @@ import (
 	"fmt"
 )
 
+const kimiObjectType = "object"
+
 // normalizeSchemaForKimi converts the supported subset of standard JSON
 // Schema into Moonshot-flavored JSON Schema (MFJS). It always works on a deep
 // copy so a provider request cannot mutate the caller's tool definition.
@@ -173,7 +175,7 @@ func normalizeKimiAnyOf(schema map[string]any, anyOf []any, path string) error {
 	}
 
 	hasObjectBundle := hasAnySchemaKeyword(schema, "properties", "required", "additionalProperties")
-	if parentType == "object" && hasObjectBundle {
+	if parentType == kimiObjectType && hasObjectBundle {
 		return distributeKimiObjectBundle(schema, anyOf, path)
 	}
 	if hasObjectBundle {
@@ -250,8 +252,8 @@ func distributeKimiObjectBundle(schema map[string]any, anyOf []any, path string)
 		}
 		if rawBranchType, exists := branch["type"]; exists {
 			branchType, ok := rawBranchType.(string)
-			if !ok || branchType != "object" {
-				return fmt.Errorf("%s.type: %v conflicts with parent type %q", branchPath, rawBranchType, "object")
+			if !ok || branchType != kimiObjectType {
+				return fmt.Errorf("%s.type: %v conflicts with parent type %q", branchPath, rawBranchType, kimiObjectType)
 			}
 		}
 		branchRequired, err := schemaStringArray(branch["required"], branchPath+".required")
@@ -263,7 +265,7 @@ func distributeKimiObjectBundle(schema map[string]any, anyOf []any, path string)
 			return err
 		}
 
-		branch["type"] = "object"
+		branch["type"] = kimiObjectType
 		branch["properties"] = cloneJSONValue(properties)
 		if hasAdditional {
 			branch["additionalProperties"] = rawAdditional
