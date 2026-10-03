@@ -76,9 +76,9 @@ func newHarness(t testing.TB, f Fixture) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bindings, ledger := artifacttest.Stores(t)
+	bindings, retentionLedger := artifacttest.Stores(t)
 	h := &harness{t: t, ctx: context.Background(), fixture: f, store: f.Store, registry: registry, bindings: bindings,
-		ledger: ledger, frozen: sessionstoretest.Frozen(t, bindings),
+		ledger: retentionLedger, frozen: sessionstoretest.Frozen(t, bindings),
 		cache: session.NewMemoryProjectionCache(), clock: &clock{now: time.Unix(1_000_000, 0)}}
 	if _, err := f.Store.Create(h.ctx, session.CreateRequest{SessionID: sid}); err != nil {
 		t.Fatal(err)
@@ -376,14 +376,14 @@ func (h *harness) spec() run.ToolSpec {
 // preparedCommand builds PrepareModelRequest against snap with the derived ids.
 func (h *harness) preparedCommand(snap store.Snapshot, withTool bool) (run.PrepareModelRequest, run.CommandID) {
 	h.t.Helper()
-	store := model.ModelRequest{Model: "m-1", Messages: []model.Message{{Role: model.MessageRoleUser,
+	request := model.ModelRequest{Model: "m-1", Messages: []model.Message{{Role: model.MessageRoleUser,
 		Content: []model.MessagePart{{Type: model.MessagePartTypeText, Text: "go"}}}}}
 	var specs []run.ToolSpec
 	if withTool {
-		store.Tools = []model.ToolDefinition{toolDef}
+		request.Tools = []model.ToolDefinition{toolDef}
 		specs = []run.ToolSpec{h.spec()}
 	}
-	reqDigest, err := schema.Canonical().DigestRequest(store)
+	reqDigest, err := schema.Canonical().DigestRequest(request)
 	if err != nil {
 		h.fatal(err)
 	}
@@ -392,7 +392,7 @@ func (h *harness) preparedCommand(snap store.Snapshot, withTool bool) (run.Prepa
 	for i, in := range snap.State.PendingInputs {
 		ids[i] = in.ID
 	}
-	return run.PrepareModelRequest{StepID: schema.Identity().DeriveModelStepID(snap.State.RunID, cmdID), Model: "m-1", Request: store,
+	return run.PrepareModelRequest{StepID: schema.Identity().DeriveModelStepID(snap.State.RunID, cmdID), Model: "m-1", Request: request,
 		RequestDigest: reqDigest, InputIDs: ids, Tools: specs}, cmdID
 }
 
@@ -479,7 +479,7 @@ func (h *harness) machine() sessionstore.Machine {
 	if err != nil {
 		h.fatal(err)
 	}
-	return state.(sessionstore.Machine)
+	return mustMachine(h.t, state)
 }
 
 func eventTypes(events []ledger.Event) []ledger.EventType {

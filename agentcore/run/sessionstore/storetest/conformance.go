@@ -265,7 +265,7 @@ func testDeclineToolCall(t *testing.T, factory Factory) {
 	if types := eventTypes(res.Events); len(types) != 1 || types[0] != sessionstore.Prefix+"tool_call_failed" {
 		t.Fatalf("decline events = %v, want tool_call_failed alone", types)
 	}
-	ts := res.Snapshot.State.Current.(run.ToolStep)
+	ts := mustToolStep(t, res.Snapshot.State.Current)
 	if ts.Calls[0].Status != run.ToolFailed || ts.Calls[0].Effect != "" {
 		t.Fatalf("declined call = %+v, want Failed with no effect", ts.Calls[0])
 	}
@@ -328,7 +328,7 @@ func testGroupComposition(t *testing.T, factory Factory) {
 			resultDigest = c.ResultDigest
 		}
 	}
-	ts := res.Snapshot.State.Current.(run.ToolStep)
+	ts := mustToolStep(t, res.Snapshot.State.Current)
 	call := ts.Calls[0].CallID
 	entries := h.contextEntries()
 	last := entries[len(entries)-1]
@@ -379,7 +379,52 @@ func (h *harness) contextEntries() []chatlog.Entry {
 	if err != nil {
 		h.fatal(err)
 	}
-	return state.(chatlog.Context).Entries
+	return mustContext(h.t, state).Entries
+}
+
+func mustToolStep(t testing.TB, current run.Current) run.ToolStep {
+	t.Helper()
+	step, ok := current.(run.ToolStep)
+	if !ok {
+		t.Fatalf("current = %T, want run.ToolStep", current)
+	}
+	return step
+}
+
+func mustModelStep(t testing.TB, current run.Current) run.ModelStep {
+	t.Helper()
+	step, ok := current.(run.ModelStep)
+	if !ok {
+		t.Fatalf("current = %T, want run.ModelStep", current)
+	}
+	return step
+}
+
+func mustContext(t testing.TB, state any) chatlog.Context {
+	t.Helper()
+	ctx, ok := state.(chatlog.Context)
+	if !ok {
+		t.Fatalf("projection state = %T, want chatlog.Context", state)
+	}
+	return ctx
+}
+
+func mustTurnSurface(t testing.TB, state any) turn.TurnSurface {
+	t.Helper()
+	surface, ok := state.(turn.TurnSurface)
+	if !ok {
+		t.Fatalf("projection state = %T, want turn.TurnSurface", state)
+	}
+	return surface
+}
+
+func mustMachine(t testing.TB, state any) sessionstore.Machine {
+	t.Helper()
+	machine, ok := state.(sessionstore.Machine)
+	if !ok {
+		t.Fatalf("projection state = %T, want sessionstore.Machine", state)
+	}
+	return machine
 }
 
 // turnSurface reads the turn surface projection through the owner's Writer.
@@ -389,7 +434,7 @@ func (h *harness) turnSurface() turn.TurnSurface {
 	if err != nil {
 		h.fatal(err)
 	}
-	return state.(turn.TurnSurface)
+	return mustTurnSurface(h.t, state)
 }
 
 func asStrings(types []ledger.EventType) []string {
@@ -548,7 +593,7 @@ func testProjection(t *testing.T, factory Factory) {
 	result, bindings := h.toolCallResult(step, 1)
 	opened := h.mustCommit("r1", schema.Identity().DeriveSettlementCommandID(eff), 0,
 		run.SubmitModelResult{StepID: step, Effect: eff, Result: result, Calls: bindings})
-	toolStep := opened.Snapshot.State.Current.(run.ToolStep).RefValue.ID
+	toolStep := mustToolStep(t, opened.Snapshot.State.Current).RefValue.ID
 	callID := bindings[0].CallID
 	toolEff := h.startTool("r1", toolStep, callID)
 	res := h.mustCommit("r1", schema.Identity().DeriveSettlementCommandID(toolEff), 0,
@@ -572,7 +617,7 @@ func testProjection(t *testing.T, factory Factory) {
 	if !ok || !wire.StatesEquivalent(&active, &loaded.State) || !wire.StatesEquivalent(&active, &rec.Snapshot.State) {
 		t.Fatal("projection, Load and Record disagree")
 	}
-	if fromCache := fromCache.(sessionstore.Machine).Active["r1"]; !wire.StatesEquivalent(&fromCache, &active) {
+	if fromCache := mustMachine(t, fromCache).Active["r1"]; !wire.StatesEquivalent(&fromCache, &active) {
 		t.Fatal("observer's cache+tail disagrees with the writer's projection")
 	}
 	// Terminal Run leaves the projection entirely; Load and Record still
@@ -658,17 +703,17 @@ func testTakeover(t *testing.T, factory Factory) {
 	// input. What the request contains is the PromptBuilder's business; the harness
 	// plans a fixed request, so only the identities and the input flow are
 	// asserted here.
-	aborted := before.State.Current.(run.ModelStep).RefValue.ID
+	aborted := mustModelStep(t, before.State.Current).RefValue.ID
 	replanned := h.prepare("r1", false)
 	after := h.load("r1")
-	if replanned == aborted || after.State.Current.(run.ModelStep).RefValue.ID != replanned {
+	if replanned == aborted || mustModelStep(t, after.State.Current).RefValue.ID != replanned {
 		t.Fatalf("replan reused the aborted step %s", aborted)
 	}
 	if len(after.State.PendingInputs) != 0 || after.State.ModelSteps != 1 {
 		t.Fatalf("replan left pending=%d steps=%d, want the late input consumed and one counted step", len(after.State.PendingInputs), after.State.ModelSteps)
 	}
 	r2 := h.load("r2")
-	ts := r2.State.Current.(run.ToolStep)
+	ts := mustToolStep(t, r2.State.Current)
 	if r2.State.Status != run.RunActive || ts.Calls[0].Status != run.ToolFailed || ts.Calls[0].Failure == nil || ts.Calls[0].Failure.Outcome != run.ToolOutcomeUnknown {
 		t.Fatalf("executing call after takeover = %+v", ts.Calls[0])
 	}
@@ -780,7 +825,7 @@ func testReattach(t *testing.T, factory Factory) {
 			t.Fatalf("takeover asked about an unknown effect %q", key.Effect)
 		}
 	}
-	ms := h.load("r1").State.Current.(run.ModelStep)
+	ms := mustModelStep(t, h.load("r1").State.Current)
 	if ms.Status != run.ModelExecuting || ms.Effect != modelEff {
 		t.Fatalf("reattached model step = %+v, want Executing under the original effect", ms)
 	}
@@ -821,11 +866,12 @@ func testOwnershipLost(t *testing.T, factory Factory) {
 	// Reading needs no ownership: the superseded process still reads the
 	// ledger by SessionID and sees the state as the new owner left it
 	// (OWN-HDL-2); only its Writer's view and commits are fenced.
-	if rec, err := old.Record(h.ctx, sid, "r1"); err != nil || rec.Snapshot.State.Current.(run.ModelStep).Status != run.ModelExecuting {
+	rec, err := old.Record(h.ctx, sid, "r1")
+	if err != nil || mustModelStep(t, rec.Snapshot.State.Current).Status != run.ModelExecuting {
 		t.Fatalf("old owner record = %v, want the current state without an ownership error", err)
 	}
 	// The new owner is unaffected.
-	if h.load("r1").State.Current.(run.ModelStep).Status != run.ModelExecuting {
+	if mustModelStep(t, h.load("r1").State.Current).Status != run.ModelExecuting {
 		t.Fatal("new owner's view changed")
 	}
 }
@@ -836,7 +882,7 @@ func testFrozenValues(t *testing.T, factory Factory) {
 	h := newHarness(t, factory(t))
 	h.startRun("t1", "r1", input("in-1"))
 	step, eff := h.executingModel("r1", false)
-	digest := h.load("r1").State.Current.(run.ModelStep).RequestDigest
+	digest := mustModelStep(t, h.load("r1").State.Current).RequestDigest
 	body, _, err := h.frozen.Get(h.ctx, digest)
 	if err != nil {
 		t.Fatal(err)
