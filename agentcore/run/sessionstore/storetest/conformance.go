@@ -829,7 +829,7 @@ func testReattach(t *testing.T, factory Factory) {
 	if ms.Status != run.ModelExecuting || ms.Effect != modelEff {
 		t.Fatalf("reattached model step = %+v, want Executing under the original effect", ms)
 	}
-	ts := h.load("r2").State.Current.(run.ToolStep)
+	ts := mustToolStep(t, h.load("r2").State.Current)
 	if ts.Calls[0].Status != run.ToolFailed || ts.Calls[0].Failure == nil || ts.Calls[0].Failure.Outcome != run.ToolOutcomeUnknown {
 		t.Fatalf("unreachable tool call = %+v, want Unknown", ts.Calls[0])
 	}
