@@ -1,10 +1,10 @@
 package loop_test
 
 import (
-	"github.com/felinics/twilight/agent/sdkconv"
 	"github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/run/loop"
 	"github.com/felinics/twilight/agentcore/run/schema"
+	"github.com/felinics/twilight/agentcore/testutil/sdkconv"
 )
 
 // RequireWaiting checks Loop yielded and a call is waiting for kind.

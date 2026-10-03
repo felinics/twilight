@@ -9,8 +9,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/felinics/twilight/agent/executor/local"
-	"github.com/felinics/twilight/agent/sdkconv"
 	"github.com/felinics/twilight/agentcore/decision"
 	. "github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/run/plan"
@@ -19,6 +17,8 @@ import (
 	"github.com/felinics/twilight/agentcore/run/sessionstore"
 	"github.com/felinics/twilight/agentcore/run/store"
 	"github.com/felinics/twilight/agentcore/session/writer"
+	"github.com/felinics/twilight/agentcore/testutil/local"
+	"github.com/felinics/twilight/agentcore/testutil/sdkconv"
 
 	"github.com/felinics/twilight/sdk"
 	"github.com/google/jsonschema-go/jsonschema"
