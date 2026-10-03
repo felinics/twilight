@@ -21,6 +21,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	headerTimestamp = "X-Timestamp"
+)
+
 // Edge TTS WebSocket client.
 // Reference: https://github.com/readest/readest/blob/main/apps/readest-app/src/libs/edgeTTS.ts
 //
@@ -192,7 +196,7 @@ func (c *edgeWsClient) configure(ctx context.Context, cfg audioConfig) error {
 	}
 	body := fmt.Sprintf(`{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":false,"wordBoundaryEnabled":true},"outputFormat":%q}}}}`, format)
 	extra := map[string]string{
-		"X-Timestamp": time.Now().String(),
+		headerTimestamp: time.Now().String(),
 	}
 	return c.sendFrame("speech.config", "application/json; charset=utf-8", body, extra)
 }
@@ -246,8 +250,8 @@ func (c *edgeWsClient) synthesize(ctx context.Context, text string, cfg audioCon
 
 	ssml := buildSSML(text, cfg.Voice, cfg.Language, cfg.Speed, cfg.Pitch)
 	extra := map[string]string{
-		"X-RequestId": connID,
-		"X-Timestamp": time.Now().String(),
+		"X-RequestId":   connID,
+		headerTimestamp: time.Now().String(),
 	}
 	if err := c.sendFrame("ssml", "application/ssml+xml", ssml, extra); err != nil {
 		return nil, err
@@ -345,8 +349,8 @@ func (c *edgeWsClient) stream(ctx context.Context, text string, cfg audioConfig)
 
 		ssml := buildSSML(text, cfg.Voice, cfg.Language, cfg.Speed, cfg.Pitch)
 		extra := map[string]string{
-			"X-RequestId": connID,
-			"X-Timestamp": time.Now().String(),
+			"X-RequestId":   connID,
+			headerTimestamp: time.Now().String(),
 		}
 		if err := c.sendFrame("ssml", "application/ssml+xml", ssml, extra); err != nil {
 			errCh <- err
