@@ -3,10 +3,10 @@ package canonical
 import (
 	"testing"
 
-	"github.com/felinics/twilight/agent/sdkconv"
 	"github.com/felinics/twilight/agentcore/jsonstable"
 	"github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/run/wire"
+	"github.com/felinics/twilight/agentcore/testutil/sdkconv"
 	"github.com/felinics/twilight/sdk"
 )
 
