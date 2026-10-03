@@ -13,6 +13,13 @@ import (
 )
 
 const (
+	effortXHigh         = "xhigh"
+	effortMedium        = "medium"
+	effortLow           = "low"
+	effortHigh          = "high"
+	defaultSystemPrompt = "You are a helpful AI assistant."
+	toolTypeFunction    = "function"
+
 	outputTypeMessage      = "message"
 	outputTypeReasoning    = "reasoning"
 	outputTypeFunctionCall = "function_call"
