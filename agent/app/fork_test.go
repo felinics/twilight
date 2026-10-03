@@ -24,6 +24,7 @@ import (
 // regenerates the Turn from the same input; withdrawing the input and sending
 // another edits it. The parent is unchanged either way, and both children
 // read the frozen bodies of the shared prefix.
+//nolint:gocyclo // integration test intentionally covers the complete fork lifecycle.
 func TestForkBeforeTurnRegeneratesAndEdits(t *testing.T) {
 	ctx := context.Background()
 	model := &scriptedRequests{answers: []sdk.ModelResult{

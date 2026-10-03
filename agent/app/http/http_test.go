@@ -93,6 +93,7 @@ func newOwner(t *testing.T) (*app.Application, *ownerhttp.Client) {
 // A conversation through the face: ensure, open, a submit command that is
 // applied and answered, the Turn and its reply read back, the events
 // stream carrying the commits, the lease naming this owner, and close.
+//nolint:gocyclo // integration test intentionally covers the complete HTTP command flow.
 func TestCommandFaceDrivesASession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()

@@ -264,6 +264,7 @@ func toolResultText(t *testing.T, model *scriptedRequests, n int) string {
 // open: Restore forks the workspace from the snapshot at the fork point,
 // Clone from the latest, Allocate gives an empty one, None unbinds
 // (APP-WSP-5, APP-WSP-7).
+//nolint:gocyclo // table-driven integration test covers all fork policies.
 func TestForkPoliciesRestoreCloneAllocateNone(t *testing.T) {
 	ctx := context.Background()
 	done := sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop, Usage: sdk.Usage{TotalTokens: 1}}
