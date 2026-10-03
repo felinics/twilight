@@ -120,8 +120,7 @@ func (m *Map) Read(_ context.Context, key effect.AssignmentKey, from ledger.Comm
 	if from >= ledger.CommitSeq(len(l.commits)) {
 		return nil, l.head(), nil
 	}
-	out := make([]ledger.Commit, uint64(len(l.commits))-uint64(from))
-	copy(out, l.commits[from:])
+	out := append([]ledger.Commit(nil), l.commits[from:]...)
 	return out, l.head(), nil
 }
 
