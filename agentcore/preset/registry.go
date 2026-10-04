@@ -1,4 +1,4 @@
-// Package preset is the authority-side registry of decision identities:
+// Package preset is the authority-side catalog of decision identities:
 // an AgentPreset in, a digest-checked PresetRef out. It never holds a model
 // client or a tool implementation; those live behind the effect port.
 package preset
@@ -10,8 +10,8 @@ import (
 	"sync"
 )
 
-// Registry registers presets and resolves PresetRefs.
-type Registry interface {
+// Catalog registers presets and resolves PresetRefs.
+type Catalog interface {
 	Register(PresetID, AgentPreset) (PresetRef, error)
 	Resolve(PresetRef) (AgentPreset, error)
 }
@@ -19,13 +19,13 @@ type Registry interface {
 // ErrUnavailable reports a PresetRef this process cannot resolve.
 var ErrUnavailable = errors.New("preset: preset_unavailable")
 
-// Memory is the in-memory Registry.
+// Memory is the in-memory Catalog.
 type Memory struct {
 	mu    sync.RWMutex
 	byRef map[PresetRef]AgentPreset
 }
 
-// NewMemory returns an empty in-memory Registry.
+// NewMemory returns an empty in-memory Catalog.
 func NewMemory() *Memory { return &Memory{byRef: make(map[PresetRef]AgentPreset)} }
 
 // Register validates and retains an immutable preset version.

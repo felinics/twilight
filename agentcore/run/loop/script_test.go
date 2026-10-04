@@ -7,7 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/felinics/twilight/agentcore/decision"
+	"github.com/felinics/twilight/agentcore/prompt"
 	"github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/run/loop"
 	"github.com/felinics/twilight/agentcore/testutil/local"
@@ -127,10 +127,10 @@ type scriptBuilder struct {
 	model    run.ModelRef
 	specs    []run.ToolSpec
 	defs     map[run.ToolRef]sdk.ToolDefinition
-	lastHint decision.Input
+	lastHint prompt.Input
 }
 
-func (p *scriptBuilder) Build(_ context.Context, hint decision.Input) (decision.Prompt, error) {
+func (p *scriptBuilder) Build(_ context.Context, hint prompt.Input) (prompt.Prompt, error) {
 	p.lastHint = hint
 	model := p.model
 	if model == "" {
@@ -146,7 +146,7 @@ func (p *scriptBuilder) Build(_ context.Context, hint decision.Input) (decision.
 	}
 	frozen, err := sdkconv.FreezeModelRequest(req)
 	if err != nil {
-		return decision.Prompt{}, err
+		return prompt.Prompt{}, err
 	}
-	return decision.Prompt{Model: model, Request: frozen, InputIDs: ids, Tools: p.specs}, nil
+	return prompt.Prompt{Model: model, Request: frozen, InputIDs: ids, Tools: p.specs}, nil
 }

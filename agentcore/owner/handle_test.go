@@ -5,12 +5,14 @@ import (
 	"errors"
 	"testing"
 
+	"time"
+
 	"github.com/felinics/twilight/agentcore/artifact/artifacttest"
 	"github.com/felinics/twilight/agentcore/chatlog"
-	"github.com/felinics/twilight/agentcore/decision"
 	"github.com/felinics/twilight/agentcore/executor"
 	"github.com/felinics/twilight/agentcore/executor/store/storetest"
 	"github.com/felinics/twilight/agentcore/owner"
+	"github.com/felinics/twilight/agentcore/prompt"
 	"github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/run/sessionstore"
 	rt "github.com/felinics/twilight/agentcore/runtime"
@@ -19,7 +21,6 @@ import (
 	"github.com/felinics/twilight/agentcore/session/writer"
 	"github.com/felinics/twilight/agentcore/sessionkernel"
 	"github.com/felinics/twilight/agentcore/testutil/local"
-	"time"
 )
 
 // newAuthority is the deployment every owner test starts from: a local
@@ -40,7 +41,7 @@ func newAuthority(t *testing.T) (*owner.Owner, *sessionkernel.Kernel) {
 		t.Fatal(err)
 	}
 	bindings, retention := artifacttest.Stores(t)
-	decisions, err := decision.NewCatalog(nil)
+	promptBuilders, err := prompt.NewCatalog(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +51,7 @@ func newAuthority(t *testing.T) (*owner.Owner, *sessionkernel.Kernel) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	x, err := rt.NewExecution(rt.ExecutionConfig{Executor: exec, Decisions: decisions},
+	x, err := rt.NewExecution(rt.ExecutionConfig{Executor: exec, PromptBuilders: promptBuilders},
 		rt.ExecutionSources{Runs: k.Runs, Projections: k.Projections, Content: k.Content})
 	if err != nil {
 		t.Fatal(err)

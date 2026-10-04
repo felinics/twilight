@@ -1,4 +1,4 @@
-package decision
+package prompt
 
 import (
 	"fmt"
@@ -11,14 +11,14 @@ import (
 // reads state only through the Sources.
 type PromptBuilderFactory func(preset.AgentPreset, Sources) Builder
 
-// Catalog resolves BuilderRefs on the Owner side. It is the decision
-// layer's only registry: every other decision input is data on the
-// AgentPreset itself.
+// Catalog resolves BuilderRefs on the Owner side. It is the prompt
+// layer's catalog: every other prompt input is data on the AgentPreset
+// itself.
 type Catalog struct {
 	factories map[BuilderRef]PromptBuilderFactory
 }
 
-// NewCatalog builds a registry; empty refs and nil factories are rejected,
+// NewCatalog builds a catalog; empty refs and nil factories are rejected,
 // duplicates conflict.
 func NewCatalog(entries map[BuilderRef]PromptBuilderFactory) (*Catalog, error) {
 	c := &Catalog{factories: make(map[BuilderRef]PromptBuilderFactory, len(entries))}
@@ -33,10 +33,10 @@ func NewCatalog(entries map[BuilderRef]PromptBuilderFactory) (*Catalog, error) {
 // Register adds one prompt builder; the ref must be new.
 func (c *Catalog) Register(ref BuilderRef, f PromptBuilderFactory) error {
 	if ref == "" || f == nil {
-		return fmt.Errorf("decision: prompt builder registration requires a ref and a factory")
+		return fmt.Errorf("prompt: prompt builder registration requires a ref and a factory")
 	}
 	if _, dup := c.factories[ref]; dup {
-		return fmt.Errorf("decision: prompt builder %q registered twice", ref)
+		return fmt.Errorf("prompt: prompt builder %q registered twice", ref)
 	}
 	c.factories[ref] = f
 	return nil
@@ -46,7 +46,7 @@ func (c *Catalog) Register(ref BuilderRef, f PromptBuilderFactory) error {
 // ErrUnknownPromptBuilder.
 func (c *Catalog) Resolve(ap preset.AgentPreset, sources Sources) (Builder, error) {
 	if c == nil {
-		return nil, fmt.Errorf("decision: no prompt builders configured")
+		return nil, fmt.Errorf("prompt: no prompt builders configured")
 	}
 	f, ok := c.factories[ap.PromptBuilder]
 	if !ok {

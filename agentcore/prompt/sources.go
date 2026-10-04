@@ -1,13 +1,12 @@
-// Package decision is the decision seam of the agent core: the catalog that
-// resolves an AgentPreset's
-// PromptBuilderRef to a PromptBuilder and the Sources a builder reads from.
-// It holds no builder of its own and no input content shape (the agent's
-// input package owns that, DEC-INP-1): how a model
+// Package prompt is the model-input seam of the agent core: the catalog that
+// resolves an AgentPreset's PromptBuilderRef to a PromptBuilder and the
+// Sources a builder reads from. It holds no builder of its own and no input
+// content shape (the agent's input package owns that, DEC-INP-1): how a model
 // request is assembled from Session state is a strategy of the agent built on
 // the core (agent/prompt is the first-party one), named by a ref the
 // AgentPreset digest covers, so the process that takes a Turn over resolves
 // the same function from the same catalog.
-package decision
+package prompt
 
 import (
 	"github.com/felinics/twilight/agentcore/chatlog"

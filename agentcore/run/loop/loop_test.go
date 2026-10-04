@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/felinics/twilight/agentcore/decision"
+	"github.com/felinics/twilight/agentcore/prompt"
 	. "github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/run/plan"
 	"github.com/felinics/twilight/agentcore/run/reconcile"
@@ -95,7 +95,7 @@ type staticBuilder struct {
 	specs []ToolSpec
 }
 
-func (p staticBuilder) Build(_ context.Context, hint decision.Input) (decision.Prompt, error) {
+func (p staticBuilder) Build(_ context.Context, hint prompt.Input) (prompt.Prompt, error) {
 	model := p.model
 	if model == "" {
 		model = testModel
@@ -110,9 +110,9 @@ func (p staticBuilder) Build(_ context.Context, hint decision.Input) (decision.P
 	}
 	frozen, err := sdkconv.FreezeModelRequest(req)
 	if err != nil {
-		return decision.Prompt{}, err
+		return prompt.Prompt{}, err
 	}
-	return decision.Prompt{Model: model, Request: frozen, InputIDs: ids, Tools: p.specs}, nil
+	return prompt.Prompt{Model: model, Request: frozen, InputIDs: ids, Tools: p.specs}, nil
 }
 
 // toolDef is the provider definition every test tool shares; ToolSpec keeps

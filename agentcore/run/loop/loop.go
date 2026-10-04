@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/felinics/twilight/agentcore/decision"
+	"github.com/felinics/twilight/agentcore/prompt"
 	run "github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/run/effect"
 	"github.com/felinics/twilight/agentcore/run/plan"
@@ -25,7 +25,7 @@ import (
 // for it.
 type Loop struct {
 	Executor Executor
-	Builder  decision.Builder
+	Builder  prompt.Builder
 	Settings Settings
 
 	mu       sync.Mutex
@@ -48,7 +48,7 @@ type runSlot struct {
 
 // New validates the settings (RUN-LOP-1) and binds the executor and the
 // prompt builder.
-func New(exec Executor, builder decision.Builder, settings Settings) (*Loop, error) {
+func New(exec Executor, builder prompt.Builder, settings Settings) (*Loop, error) {
 	if exec == nil {
 		return nil, errors.New("agent: loop: nil executor")
 	}

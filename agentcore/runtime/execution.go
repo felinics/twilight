@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"github.com/felinics/twilight/agentcore/chatlog"
-	"github.com/felinics/twilight/agentcore/decision"
 	"github.com/felinics/twilight/agentcore/driver"
 	"github.com/felinics/twilight/agentcore/observe"
 	"github.com/felinics/twilight/agentcore/preset"
+	"github.com/felinics/twilight/agentcore/prompt"
 	"github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/run/effect"
 	"github.com/felinics/twilight/agentcore/run/loop"
@@ -33,17 +33,17 @@ type ExecutionSources struct {
 }
 
 // ExecutionConfig composes one Execution: the effect port it drives, the
-// decision identities it resolves and the policies of the drive chain.
+// preset identities it resolves and the policies of the drive chain.
 type ExecutionConfig struct {
 	// Executor is the effect layer port (RUN-EXE-3): required.
 	Executor effect.ExecutionPort
-	// Presets is the registry of decision identities; nil selects an
-	// in-memory registry.
-	Presets preset.Registry
-	// Decisions resolve each preset's PromptBuilderRef (DEC-CAT): required.
-	// The runtime ships no builder; the agent built on it supplies its
-	// catalog (agent/prompt.DefaultPromptBuilders for the reference agent).
-	Decisions *decision.Catalog
+	// Presets is the catalog of preset identities; nil selects an
+	// in-memory catalog.
+	Presets preset.Catalog
+	// PromptBuilders resolves each preset's PromptBuilderRef (DEC-CAT):
+	// required. The runtime ships no builder; the agent built on it supplies
+	// its catalog (agent/prompt.DefaultPromptBuilders for the reference agent).
+	PromptBuilders *prompt.Catalog
 	// MissingEffects is the takeover policy for an Executing effect the
 	// Executor holds nothing for (RUN-CMT-7): the zero value disposes it,
 	// reconcile.RedispatchMissing hands it to the Executor again within a
@@ -75,15 +75,15 @@ type ExecutionConfig struct {
 
 // Execution is the execution side assembled over one Session kernel: the
 // settlement subscription, the drive chain (Loops, Driver, Recovery,
-// Responders), the decision identities and the effect port. It is what
+// Responders), the preset identities and the effect port. It is what
 // advances an agent from Session durable state; which process hosts it
 // next to which kernel is a deployment choice.
 type Execution struct {
 	// Executor is the effect port the drive chain dispatches through.
 	Executor effect.ExecutionPort
-	// Presets is the registry of decision identities the Loops resolve and
+	// Presets is the catalog of preset identities the Loops resolve and
 	// the Turn protocol starts Turns under.
-	Presets preset.Registry
+	Presets preset.Catalog
 	// Watcher is the settlement subscription every Loop and Reconciler of
 	// this Execution waits on; a host component that waits for an effect of
 	// its own (compaction's summary) shares it instead of subscribing again.
@@ -106,8 +106,8 @@ func NewExecution(cfg ExecutionConfig, src ExecutionSources) (*Execution, error)
 	if cfg.Executor == nil {
 		return nil, errors.New("runtime: an Executor port is required")
 	}
-	if cfg.Decisions == nil {
-		return nil, errors.New("runtime: a prompt builder catalog is required (ExecutionConfig.Decisions); the runtime ships no default")
+	if cfg.PromptBuilders == nil {
+		return nil, errors.New("runtime: a prompt builder catalog is required (ExecutionConfig.PromptBuilders); the runtime ships no default")
 	}
 	if cfg.MissingEffects == reconcile.RedispatchMissing && cfg.Redispatches == nil {
 		return nil, errors.New("runtime: MissingEffects=redispatch requires a dispatch ledger (ExecutionConfig.Redispatches, RUN-EXE-15)")
@@ -129,8 +129,8 @@ func NewExecution(cfg ExecutionConfig, src ExecutionSources) (*Execution, error)
 		x.Progress.Failed(sid, err)
 	}
 	// A nil resolver gives every effect no target (APP-TGT-1).
-	loops := &driver.Loops{Executor: cfg.Executor, Presets: presets, Decisions: cfg.Decisions, Targets: cfg.TargetResolver,
-		Sources: decision.Sources{Projections: src.Projections, Content: src.Content}, Watcher: x.Watcher, Planner: cfg.Planner}
+	loops := &driver.Loops{Executor: cfg.Executor, Presets: presets, PromptBuilders: cfg.PromptBuilders, Targets: cfg.TargetResolver,
+		Sources: prompt.Sources{Projections: src.Projections, Content: src.Content}, Watcher: x.Watcher, Planner: cfg.Planner}
 	x.Recovery = &driver.Recovery{Runs: src.Runs, Executor: cfg.Executor, Loops: loops, Watcher: x.Watcher, Fail: report,
 		MissingEffects: cfg.MissingEffects, Redispatches: cfg.Redispatches, OrphanProbe: cfg.OrphanProbe, Sink: progressSink{x.Progress}}
 	var responders *driver.Responders

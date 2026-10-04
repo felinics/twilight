@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/felinics/twilight/agentcore/decision"
+	"github.com/felinics/twilight/agentcore/prompt"
 	run "github.com/felinics/twilight/agentcore/run"
 	effect "github.com/felinics/twilight/agentcore/run/effect"
 	"github.com/felinics/twilight/agentcore/run/store"
@@ -72,7 +72,7 @@ type Settings struct {
 // PrepareHook is Settings.BeforePrepare: the store is the Loop's own bound
 // RunStore and input the PromptInput the plan is about to hand the
 // PromptBuilder.
-type PrepareHook func(ctx context.Context, store store.RunStore, input decision.Input) error
+type PrepareHook func(ctx context.Context, store store.RunStore, input prompt.Input) error
 
 // --- EventSink: realtime observation, never authority (RUN-LOP-6) ---
 

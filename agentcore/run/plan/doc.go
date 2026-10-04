@@ -5,5 +5,5 @@
 // the Executing targets (RUN-CMT-7): the recovery command of each target with
 // its derived identity. agent/run/reconcile decides which dispositions a new
 // owner actually issues. Read-only queries over the state live in the run
-// package itself; the decision boundary's input type is decision.Input.
+// package itself; the prompt boundary's input type is prompt.Input.
 package plan

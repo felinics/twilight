@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/felinics/twilight/agentcore/decision"
+	"github.com/felinics/twilight/agentcore/prompt"
 	run "github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/run/effect"
 	"github.com/felinics/twilight/agentcore/run/frozen"
@@ -14,7 +14,7 @@ import (
 	"github.com/felinics/twilight/agentcore/run/store"
 )
 
-func (l *Loop) planAndPrepare(ctx context.Context, rt store.RunStore, events EventSink, snapshot *store.Snapshot, hint decision.Input) error {
+func (l *Loop) planAndPrepare(ctx context.Context, rt store.RunStore, events EventSink, snapshot *store.Snapshot, hint prompt.Input) error {
 	hint.Scope = rt.Scope()
 	p, err := l.Builder.Build(ctx, hint)
 	if err != nil {

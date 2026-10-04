@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/felinics/twilight/agentcore/decision"
 	"github.com/felinics/twilight/agentcore/preset"
+	"github.com/felinics/twilight/agentcore/prompt"
 	"github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/run/effect"
 	"github.com/felinics/twilight/agentcore/run/loop"
@@ -33,7 +33,7 @@ type Presets interface {
 // being driven, so what it commits (an in-turn checkpoint) is what the
 // PromptBuilder reads next. Errors stop the drive.
 type Planner interface {
-	BeforePrepare(ctx context.Context, w writer.Writer, input decision.Input) error
+	BeforePrepare(ctx context.Context, w writer.Writer, input prompt.Input) error
 }
 
 // Loops builds the Loop of each AgentPreset once and hands the same Loop to
@@ -42,10 +42,10 @@ type Planner interface {
 // fixed when the first Loop is built; a field changed later reaches only
 // presets not built yet.
 type Loops struct {
-	Executor  effect.ExecutionPort
-	Presets   Presets
-	Decisions *decision.Catalog
-	Sources   decision.Sources
+	Executor       effect.ExecutionPort
+	Presets        Presets
+	PromptBuilders *prompt.Catalog
+	Sources        prompt.Sources
 	// Targets resolves the opaque target of each effect; every Loop shares
 	// it.
 	Targets loop.TargetResolver
@@ -78,7 +78,7 @@ func (l *Loops) For(ref preset.PresetRef) (*loop.Loop, error) {
 	if lp, ok := l.loops[ref]; ok {
 		return lp, nil
 	}
-	builder, err := l.Decisions.Resolve(ap, l.Sources)
+	builder, err := l.PromptBuilders.Resolve(ap, l.Sources)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +137,7 @@ func ownerOf(ctx context.Context, w writer.Writer, runID run.RunID) (turn.TurnID
 
 // beforePrepare hands the Loop's hook to the Planner with the Writer the
 // bound store commits through.
-func (l *Loops) beforePrepare(ctx context.Context, st store.RunStore, input decision.Input) error {
+func (l *Loops) beforePrepare(ctx context.Context, st store.RunStore, input prompt.Input) error {
 	owned, ok := st.(interface{ Writer() writer.Writer })
 	if !ok {
 		return fmt.Errorf("driver: run store %T exposes no writer for the planner", st)

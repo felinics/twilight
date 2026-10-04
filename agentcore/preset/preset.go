@@ -13,7 +13,7 @@ type (
 	// PresetID names a preset under registration; the PresetRef a Session
 	// records pairs it with the digest of the registered AgentPreset.
 	PresetID string
-	// PromptBuilderRef names the decision component that builds the model
+	// PromptBuilderRef identifies the prompt builder that builds the model
 	// prompt for a Turn. It is part of the preset digest.
 	PromptBuilderRef string
 )
@@ -43,14 +43,15 @@ type ToolContract struct {
 }
 
 // AgentPreset is the decision identity a Turn is started under: every
-// input to the decision layer that must be the same when another process
+// input to the model-request layer that must be the same when another process
 // resumes the Turn. The Session records PresetRef{ID, Digest}; credentials,
 // clients and tool implementations never enter it. Streaming is not part of
 // the identity: it is an execution-side observation choice of the backend.
 type AgentPreset struct {
 	Model run.ModelRef   `json:"model"`
 	Tools []ToolContract `json:"tools,omitempty"`
-	// PromptBuilder names the decision component resolved on the Owner side.
+	// PromptBuilder is the ref of the prompt builder resolved on the Owner
+	// side.
 	PromptBuilder PromptBuilderRef `json:"promptBuilder"`
 	// Scheduling is how the tool calls of one step run: parallel (default) or
 	// sequential, with an optional bound on concurrent workers. It is frozen
@@ -67,8 +68,8 @@ type AgentPreset struct {
 // it pins every PresetRef ever recorded.
 const DigestDomain = "twilight/turn/preset"
 
-// DigestPreset covers the fields that change what the decision layer does
-// for a Turn: Model, Tools, Prompt, Scheduling, MalformedRetries and
+// DigestPreset covers the fields that affect a Turn's model requests and
+// tool execution: Model, Tools, Prompt, Scheduling, MalformedRetries and
 // SystemPrompt.
 func DigestPreset(p *AgentPreset) (jsonstable.Digest, error) {
 	body := struct {
@@ -86,7 +87,7 @@ func DigestPreset(p *AgentPreset) (jsonstable.Digest, error) {
 	return jsonstable.DigestBytes(raw), nil
 }
 
-// ValidatePreset checks the identity fields a registry must refuse to record
+// ValidatePreset checks the identity fields a catalog must refuse to record
 // without: model and prompt builder, plus a well-formed Scheduling.
 func ValidatePreset(p *AgentPreset) error {
 	switch {
