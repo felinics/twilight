@@ -33,5 +33,3 @@ go.work.sum
 # .vscode/
 
 tmp/
-.twilight/
-/twilight-agent
