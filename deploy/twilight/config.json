@@ -1,6 +1,7 @@
 {
   "listen": "127.0.0.1:8080",
   "root": "./var/twilight",
+  "workspace": ".",
   "catalog": "./deploy/twilight/models.json",
   "secrets": "./var/secrets",
   "model": "chat",

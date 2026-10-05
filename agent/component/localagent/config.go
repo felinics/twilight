@@ -34,9 +34,12 @@ type FileConfig struct {
 	// Listen is the only network address in local mode: the application's
 	// command API. It defaults to 127.0.0.1:8080.
 	Listen string `json:"listen,omitempty"`
-	// Root contains the local database, Session ledger, CAS and workspaces.
-	// It defaults to ./var/twilight.
+	// Root contains the local database, Session ledger and CAS. It defaults
+	// to ./var/twilight; it is not the user's workspace.
 	Root string `json:"root,omitempty"`
+	// Workspace is the existing local directory the agent operates on. It
+	// defaults to the current working directory.
+	Workspace string `json:"workspace,omitempty"`
 	// Catalog is an agent/models.File. It defaults to ./models.json.
 	Catalog string `json:"catalog,omitempty"`
 	// Secrets is a directory containing one file per model credential.
@@ -71,6 +74,9 @@ func (c FileConfig) defaults() FileConfig {
 	if c.Root == "" {
 		c.Root = defaultRoot
 	}
+	if c.Workspace == "" {
+		c.Workspace = "."
+	}
 	if c.Catalog == "" {
 		c.Catalog = defaultCatalog
 	}
@@ -94,8 +100,8 @@ func (c FileConfig) validate() error {
 	if c.Model == "" {
 		return errors.New("localagent: model is required")
 	}
-	if c.Root == "" || c.Catalog == "" || c.Secrets == "" {
-		return errors.New("localagent: root, catalog and secrets must not be empty")
+	if c.Root == "" || c.Workspace == "" || c.Catalog == "" || c.Secrets == "" {
+		return errors.New("localagent: root, workspace, catalog and secrets must not be empty")
 	}
 	if c.Lease.Std() <= 0 || c.InboxPoll.Std() <= 0 {
 		return errors.New("localagent: lease and inboxPoll must be positive")
@@ -150,9 +156,13 @@ func ComposeFile(ctx context.Context, raw FileConfig) (*Service, error) {
 	if err != nil {
 		return closeDB(fmt.Errorf("localagent: content: %w", err))
 	}
-	provider, err := local.New(filepath.Join(cfg.Root, "workspaces"))
+	workspaceRoot, err := filepath.Abs(cfg.Workspace)
 	if err != nil {
-		return closeDB(fmt.Errorf("localagent: workspaces: %w", err))
+		return closeDB(fmt.Errorf("localagent: workspace: %w", err))
+	}
+	provider, err := local.NewWorkspace(workspaceRoot)
+	if err != nil {
+		return closeDB(fmt.Errorf("localagent: workspace: %w", err))
 	}
 
 	defs, err := app.WorkspaceTools(nil)
@@ -188,7 +198,7 @@ func ComposeFile(ctx context.Context, raw FileConfig) (*Service, error) {
 			Scan:        defaultActivationScan,
 			Options:     app.SessionOptions{InboxPoll: cfg.InboxPoll.Std()},
 		},
-		Workspaces: &app.WorkspaceConfig{Store: db.Workspaces(), SnapshotAfterTurn: true},
+		Workspaces: &app.WorkspaceConfig{Store: db.Workspaces(), SnapshotAfterTurn: false},
 	}
 
 	ag, err := Compose(Config{

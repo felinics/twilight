@@ -26,7 +26,12 @@ import (
 const Backend environment.Backend = "local"
 
 // Provider materializes environments as directories under Root.
-type Provider struct{ root string }
+type Provider struct {
+	root         string
+	fixed        bool
+	fixedRef     environment.EnvironmentRef
+	snapshotRoot string
+}
 
 var _ environment.Provider = (*Provider)(nil)
 
@@ -42,12 +47,37 @@ func New(root string) (*Provider, error) {
 	if err := os.MkdirAll(abs, 0o750); err != nil {
 		return nil, err
 	}
-	return &Provider{root: abs}, nil
+	return &Provider{root: abs, snapshotRoot: abs}, nil
+}
+
+// NewWorkspace returns a provider over one existing user workspace directory.
+// It is for a trusted local agent: every logical workspace resolves to this
+// one directory, and Restore is deliberately unsupported rather than silently
+// overwriting the user's files.
+func NewWorkspace(root string) (*Provider, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("local: workspace root %s is not a directory", abs)
+	}
+	return &Provider{root: abs, fixed: true, fixedRef: environment.EnvironmentRef("local-workspace"), snapshotRoot: filepath.Join(filepath.Dir(abs), ".twilight")}, nil
 }
 
 // Create materializes an empty directory. A Spec with a Base is
 // ErrUnsupported: this provider has no notion of a revision to check out.
 func (p *Provider) Create(_ context.Context, spec environment.Spec) (environment.Environment, error) {
+	if p.fixed {
+		if spec.Base != "" {
+			return nil, fmt.Errorf("%w: local workspace cannot materialize base %q", environment.ErrUnsupported, spec.Base)
+		}
+		return &Environment{ref: p.fixedRef, dir: p.root, snapshotRoot: p.snapshotRoot}, nil
+	}
 	if spec.Base != "" {
 		return nil, fmt.Errorf("%w: local provider cannot materialize base %q", environment.ErrUnsupported, spec.Base)
 	}
@@ -60,7 +90,7 @@ func (p *Provider) Create(_ context.Context, spec environment.Spec) (environment
 	if err := os.Mkdir(dir, 0o750); err != nil {
 		return nil, err
 	}
-	return &Environment{ref: ref, dir: dir}, nil
+	return &Environment{ref: ref, dir: dir, snapshotRoot: p.snapshotRoot}, nil
 }
 
 // snapshotsDir holds the snapshots; its name is not a valid environment ref.
@@ -70,6 +100,9 @@ const snapshotsDir = ".snapshots"
 // unknown State is ErrNotFound. Destination.Base is ignored: the snapshot
 // already carries the workspace's files.
 func (p *Provider) Restore(ctx context.Context, spec environment.RestoreSpec) (environment.Environment, error) {
+	if p.fixed {
+		return nil, fmt.Errorf("%w: local workspace restore would overwrite the user's directory", environment.ErrUnsupported)
+	}
 	src, err := p.snapshotPath(spec.State)
 	if err != nil {
 		return nil, err
@@ -109,6 +142,12 @@ func copyTree(src, dst string) error {
 
 // Attach adopts the directory ref names; a missing one is ErrNotFound.
 func (p *Provider) Attach(_ context.Context, ref environment.EnvironmentRef) (environment.Environment, error) {
+	if p.fixed {
+		if ref != p.fixedRef {
+			return nil, fmt.Errorf("%w: %s", environment.ErrNotFound, ref)
+		}
+		return &Environment{ref: p.fixedRef, dir: p.root, snapshotRoot: p.snapshotRoot}, nil
+	}
 	name := string(ref)
 	if name == "" || name != filepath.Base(name) || strings.HasPrefix(name, ".") {
 		return nil, fmt.Errorf("%w: malformed environment ref %q", environment.ErrNotFound, ref)
@@ -118,14 +157,15 @@ func (p *Provider) Attach(_ context.Context, ref environment.EnvironmentRef) (en
 	if err != nil || !info.IsDir() {
 		return nil, fmt.Errorf("%w: %s", environment.ErrNotFound, ref)
 	}
-	return &Environment{ref: ref, dir: dir}, nil
+	return &Environment{ref: ref, dir: dir, snapshotRoot: p.snapshotRoot}, nil
 }
 
 // Environment is one directory. It offers environment.Executor and
 // environment.FS.
 type Environment struct {
-	ref environment.EnvironmentRef
-	dir string
+	ref          environment.EnvironmentRef
+	dir          string
+	snapshotRoot string
 }
 
 var (
@@ -151,7 +191,11 @@ func (e *Environment) Snapshot(context.Context) (environment.StateRef, error) {
 		return "", err
 	}
 	state := "snap-" + hex.EncodeToString(b[:])
-	dir := filepath.Join(filepath.Dir(e.dir), snapshotsDir, state)
+	snapshotRoot := e.snapshotRoot
+	if snapshotRoot == "" {
+		snapshotRoot = filepath.Dir(e.dir)
+	}
+	dir := filepath.Join(snapshotRoot, snapshotsDir, state)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", err
 	}
