@@ -30,6 +30,13 @@ spec:
     spec:
       securityContext:
         fsGroup: 10001
+      nodeSelector:
+        twilight.io/role: {{ .Values.placement.backend | quote }}
+      tolerations:
+        - key: twilight.io/role
+          operator: Equal
+          value: {{ .Values.placement.backend | quote }}
+          effect: NoSchedule
       containers:
         - name: model-backend
           image: {{ include "twilight.image" . }}

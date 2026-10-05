@@ -18,6 +18,14 @@ postgres:
 workspace:
   storage: 5Gi
 
+# Every workload role gets its own k3d agent node. The matching taint is
+# applied when the cluster is created, so unrelated pods stay away too.
+placement:
+  owner: owner
+  executor: executor
+  backend: backend
+  store: store
+
 services:
   owner:
     replicas: 1

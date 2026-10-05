@@ -1,0 +1,35 @@
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: twilight
+servers: 1
+agents: 4
+
+options:
+  k3s:
+    nodeLabels:
+      - label: twilight.io/role=owner
+        nodeFilters:
+          - agent:0
+      - label: twilight.io/role=executor
+        nodeFilters:
+          - agent:1
+      - label: twilight.io/role=backend
+        nodeFilters:
+          - agent:2
+      - label: twilight.io/role=store
+        nodeFilters:
+          - agent:3
+    extraArgs:
+      - arg: --node-taint=twilight.io/role=owner:NoSchedule
+        nodeFilters:
+          - agent:0
+      - arg: --node-taint=twilight.io/role=executor:NoSchedule
+        nodeFilters:
+          - agent:1
+      - arg: --node-taint=twilight.io/role=backend:NoSchedule
+        nodeFilters:
+          - agent:2
+      - arg: --node-taint=twilight.io/role=store:NoSchedule
+        nodeFilters:
+          - agent:3

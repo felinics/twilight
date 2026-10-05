@@ -30,6 +30,13 @@ spec:
     spec:
       securityContext:
         fsGroup: 10001
+      nodeSelector:
+        twilight.io/role: {{ .Values.placement.owner | quote }}
+      tolerations:
+        - key: twilight.io/role
+          operator: Equal
+          value: {{ .Values.placement.owner | quote }}
+          effect: NoSchedule
       initContainers:
         - name: wait-for-postgres
           image: {{ .Values.postgres.image }}
