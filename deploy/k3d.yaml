@@ -3,7 +3,7 @@ kind: Simple
 metadata:
   name: twilight
 servers: 1
-agents: 4
+agents: 5
 
 options:
   k3s:
@@ -20,6 +20,9 @@ options:
       - label: twilight.io/role=store
         nodeFilters:
           - agent:3
+      - label: twilight.io/role=sandbox
+        nodeFilters:
+          - agent:4
     extraArgs:
       - arg: --node-taint=twilight.io/role=owner:NoSchedule
         nodeFilters:
@@ -33,3 +36,6 @@ options:
       - arg: --node-taint=twilight.io/role=store:NoSchedule
         nodeFilters:
           - agent:3
+      - arg: --node-taint=twilight.io/role=sandbox:NoSchedule
+        nodeFilters:
+          - agent:4

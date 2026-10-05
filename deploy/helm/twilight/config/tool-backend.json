@@ -1,5 +1,5 @@
 {
   "listen": ":8083",
   "workspaces": {"postgres": {"dsnFile": "/etc/twilight/secrets/postgres-dsn"}},
-  "environments": {"local": {"root": "/var/lib/twilight/envs"}}
+  "environments": {"agentSandbox": {"namespace": "{{ .Release.Namespace }}", "warmPool": "{{ .Values.agentSandbox.warmPool }}"}}
 }

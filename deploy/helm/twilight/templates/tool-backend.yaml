@@ -28,6 +28,7 @@ spec:
       labels:
         {{- include "twilight.selectorLabels" (dict "name" "tool-backend") | nindent 8 }}
     spec:
+      serviceAccountName: twilight-tool-backend
       securityContext:
         fsGroup: 10001
       nodeSelector:
@@ -72,8 +73,6 @@ spec:
             - name: secrets
               mountPath: /etc/twilight/secrets
               readOnly: true
-            - name: environments
-              mountPath: /var/lib/twilight
       volumes:
         - name: config
           configMap:
@@ -84,18 +83,3 @@ spec:
         - name: secrets
           secret:
             secretName: {{ include "twilight.secretName" . }}
-        - name: environments
-          persistentVolumeClaim:
-            claimName: twilight-environments
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: twilight-environments
-  labels:
-    {{- include "twilight.labels" (dict "name" "tool-backend" "Release" .Release) | nindent 4 }}
-spec:
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: {{ .Values.workspace.storage }}

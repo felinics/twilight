@@ -1,0 +1,71 @@
+{{- if .Values.agentSandbox.enabled }}
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: twilight-sandbox-template
+  labels:
+    {{- include "twilight.labels" (dict "name" "sandbox-template" "Release" .Release) | nindent 4 }}
+spec:
+  podTemplate:
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: OnFailure
+      nodeSelector:
+        twilight.io/role: {{ .Values.placement.sandbox | quote }}
+      tolerations:
+        - key: twilight.io/role
+          operator: Equal
+          value: {{ .Values.placement.sandbox | quote }}
+          effect: NoSchedule
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        runAsNonRoot: true
+      containers:
+        - name: sandboxd
+          image: {{ .Values.agentSandbox.image }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          ports:
+            - name: rest
+              containerPort: 8080
+            - name: grpc
+              containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: rest
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+      volumes:
+        - name: workspace
+          emptyDir: {}
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: {{ .Values.agentSandbox.warmPool }}
+  labels:
+    {{- include "twilight.labels" (dict "name" "sandbox-pool" "Release" .Release) | nindent 4 }}
+spec:
+  updateStrategy:
+    type: Recreate
+  replicas: {{ .Values.agentSandbox.replicas }}
+  sandboxTemplateRef:
+    name: twilight-sandbox-template
+{{- end }}
