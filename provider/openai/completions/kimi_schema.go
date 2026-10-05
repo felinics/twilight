@@ -252,13 +252,8 @@ func distributeKimiObjectBundle(schema map[string]any, anyOf []any, path string)
 		}
 		if rawBranchType, exists := branch[keyType]; exists {
 			branchType, ok := rawBranchType.(string)
-<<<<<<< HEAD
 			if !ok || branchType != kimiObjectType {
 				return fmt.Errorf("%s.type: %v conflicts with parent type %q", branchPath, rawBranchType, kimiObjectType)
-=======
-			if !ok || branchType != schemaTypeObject {
-				return fmt.Errorf("%s.type: %v conflicts with parent type %q", branchPath, rawBranchType, schemaTypeObject)
->>>>>>> d8dc29d6 (agent: add storage, workspace, and model adapters)
 			}
 		}
 		branchRequired, err := schemaStringArray(branch["required"], branchPath+".required")
@@ -270,11 +265,7 @@ func distributeKimiObjectBundle(schema map[string]any, anyOf []any, path string)
 			return err
 		}
 
-<<<<<<< HEAD
 		branch["type"] = kimiObjectType
-=======
-		branch[keyType] = schemaTypeObject
->>>>>>> d8dc29d6 (agent: add storage, workspace, and model adapters)
 		branch["properties"] = cloneJSONValue(properties)
 		if hasAdditional {
 			branch["additionalProperties"] = rawAdditional

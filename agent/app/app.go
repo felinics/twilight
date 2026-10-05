@@ -14,7 +14,6 @@ import (
 	"github.com/felinics/twilight/agent/prompt"
 	"github.com/felinics/twilight/agent/spawn"
 	"github.com/felinics/twilight/agent/workspace"
-	"github.com/felinics/twilight/agentcore/decision"
 	"github.com/felinics/twilight/agentcore/driver"
 	"github.com/felinics/twilight/agentcore/inbox"
 	"github.com/felinics/twilight/agentcore/ledger"
@@ -22,6 +21,7 @@ import (
 	"github.com/felinics/twilight/agentcore/observe"
 	"github.com/felinics/twilight/agentcore/owner"
 	"github.com/felinics/twilight/agentcore/preset"
+	decision "github.com/felinics/twilight/agentcore/prompt"
 	"github.com/felinics/twilight/agentcore/run"
 	rt "github.com/felinics/twilight/agentcore/runtime"
 	"github.com/felinics/twilight/agentcore/session"
@@ -231,16 +231,16 @@ func New(c Config) (*Application, error) { //nolint:gocritic // hugeParam: Confi
 			resolver = &workspace.Resolver{}
 			c.Execution.TargetResolver = resolver
 		}
-		if c.Execution.Decisions == nil {
-			c.Execution.Decisions = prompt.CatalogWith(prompt.WorkspacePreface)
+		if c.Execution.PromptBuilders == nil {
+			c.Execution.PromptBuilders = prompt.CatalogWith(prompt.WorkspacePreface)
 		}
 		app.snapshots = c.Workspaces.Snapshots
 		if c.Workspaces.SnapshotAfterTurn && app.snapshots == nil {
 			return nil, errors.New("app: Workspaces.SnapshotAfterTurn requires a Snapshotter")
 		}
 	}
-	if c.Execution.Decisions == nil {
-		c.Execution.Decisions = prompt.DefaultCatalog()
+	if c.Execution.PromptBuilders == nil {
+		c.Execution.PromptBuilders = prompt.DefaultCatalog()
 	}
 	kernel, err := sessionkernel.New(c.Kernel)
 	if err != nil {

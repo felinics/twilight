@@ -12,8 +12,8 @@ import (
 
 	"github.com/felinics/twilight/agent/sdkconv"
 	"github.com/felinics/twilight/agentcore/chatlog"
-	"github.com/felinics/twilight/agentcore/decision"
 	"github.com/felinics/twilight/agentcore/preset"
+	decision "github.com/felinics/twilight/agentcore/prompt"
 	"github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/run/model"
 	"github.com/felinics/twilight/agentcore/session"
