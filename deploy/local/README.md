@@ -1,4 +1,6 @@
-# 单机多进程运行
+# 单机多进程运行（云端拓扑模拟）
+
+> 这里是把 owner、worker、model-backend、tool-backend 拆成四个进程的服务拓扑验证。该目录是临时部署拓扑，后续将由 k3d 部署替代。
 
 四个二进制各读一个 JSON 文档（`agent/config`，不读环境变量），共享 `./var` 下的文件：owner 与 tool-backend 共享 `owner.db` 的 workspaces 表，worker 独占 `executions.db`，Session ledger 与 CAS 正文在 filestore 目录。这只用于单机验证。跨进程与跨 Pod 共享时把各文档的 `{"sqlite": ...}` 换成 `{"postgres": {"dsn": "postgres://..."}}`（或 `dsnFile` 指向含 DSN 的文件）；owner 配置 Postgres 后不再需要 `sessions`/`content` 两个目录，Session ledger 与 CAS 正文都在该数据库（CLD-STO-1）。
 

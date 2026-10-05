@@ -1,0 +1,8 @@
+{
+  "listen": "127.0.0.1:8080",
+  "root": "./var/twilight",
+  "catalog": "./deploy/twilight/models.json",
+  "secrets": "./var/secrets",
+  "model": "chat",
+  "systemPrompt": "You are a coding assistant working in the bound workspace."
+}
