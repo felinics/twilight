@@ -1,0 +1,9 @@
+Twilight is deployed in namespace {{ .Release.Namespace }}.
+
+The owner API is an internal ClusterIP service. Forward it locally:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/owner 8080:8080
+
+Then check readiness:
+
+  curl http://127.0.0.1:8080/readyz

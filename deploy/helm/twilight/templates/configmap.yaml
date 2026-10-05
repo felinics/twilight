@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: twilight-config
+  labels:
+    {{- include "twilight.labels" (dict "name" "config" "Release" .Release) | nindent 4 }}
+data:
+  owner.json: |
+{{ .Files.Get "config/owner.json" | indent 4 }}
+  worker.json: |
+{{ .Files.Get "config/worker.json" | indent 4 }}
+  model-backend.json: |
+{{ .Files.Get "config/model-backend.json" | indent 4 }}
+  tool-backend.json: |
+{{ .Files.Get "config/tool-backend.json" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: twilight-models
+  labels:
+    {{- include "twilight.labels" (dict "name" "models" "Release" .Release) | nindent 4 }}
+data:
+  models.json: |
+{{ .Files.Get "config/models.json" | indent 4 }}

@@ -3,12 +3,11 @@ kind: Service
 metadata:
   name: postgres
   labels:
-    app.kubernetes.io/name: postgres
-    app.kubernetes.io/part-of: twilight
+    {{- include "twilight.labels" (dict "name" "postgres" "Release" .Release) | nindent 4 }}
 spec:
   clusterIP: None
   selector:
-    app.kubernetes.io/name: postgres
+    {{- include "twilight.selectorLabels" (dict "name" "postgres") | nindent 4 }}
   ports:
     - name: postgres
       port: 5432
@@ -19,60 +18,57 @@ kind: PersistentVolumeClaim
 metadata:
   name: postgres-data
   labels:
-    app.kubernetes.io/name: postgres
-    app.kubernetes.io/part-of: twilight
+    {{- include "twilight.labels" (dict "name" "postgres" "Release" .Release) | nindent 4 }}
 spec:
   accessModes: [ReadWriteOnce]
   resources:
     requests:
-      storage: 5Gi
+      storage: {{ .Values.postgres.storage }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: postgres
   labels:
-    app.kubernetes.io/name: postgres
-    app.kubernetes.io/part-of: twilight
+    {{- include "twilight.labels" (dict "name" "postgres" "Release" .Release) | nindent 4 }}
 spec:
   serviceName: postgres
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: postgres
+      {{- include "twilight.selectorLabels" (dict "name" "postgres") | nindent 6 }}
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: postgres
-        app.kubernetes.io/part-of: twilight
+        {{- include "twilight.selectorLabels" (dict "name" "postgres") | nindent 8 }}
     spec:
       securityContext:
         fsGroup: 999
       containers:
         - name: postgres
-          image: postgres:18-alpine
+          image: {{ .Values.postgres.image }}
           imagePullPolicy: IfNotPresent
           ports:
             - name: postgres
               containerPort: 5432
           env:
             - name: POSTGRES_DB
-              value: twilight
+              value: {{ .Values.postgres.database | quote }}
             - name: POSTGRES_USER
-              value: twilight
+              value: {{ .Values.postgres.username | quote }}
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: twilight-secrets
-                  key: postgres-password
+                  name: {{ include "twilight.secretName" . }}
+                  key: {{ .Values.postgres.passwordKey }}
           readinessProbe:
             exec:
-              command: ["sh", "-c", "pg_isready -U twilight -d twilight"]
+              command: ["sh", "-c", "pg_isready -U {{ .Values.postgres.username }} -d {{ .Values.postgres.database }}"]
             periodSeconds: 5
             timeoutSeconds: 3
           livenessProbe:
             exec:
-              command: ["sh", "-c", "pg_isready -U twilight -d twilight"]
+              command: ["sh", "-c", "pg_isready -U {{ .Values.postgres.username }} -d {{ .Values.postgres.database }}"]
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 3

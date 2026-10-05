@@ -1,0 +1,53 @@
+image:
+  repository: twilight
+  tag: dev
+  pullPolicy: Never
+
+secrets:
+  # Create this Secret outside Helm. It contains postgres-password,
+  # postgres-dsn and OPENAI_API_KEY.
+  existingSecret: twilight-secrets
+
+postgres:
+  image: postgres:18-alpine
+  storage: 5Gi
+  database: twilight
+  username: twilight
+  passwordKey: postgres-password
+
+workspace:
+  storage: 5Gi
+
+services:
+  owner:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        memory: 256Mi
+  worker:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        memory: 256Mi
+  modelBackend:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        memory: 256Mi
+  toolBackend:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        memory: 256Mi

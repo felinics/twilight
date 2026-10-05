@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: owner
+  labels:
+    {{- include "twilight.labels" (dict "name" "owner" "Release" .Release) | nindent 4 }}
+spec:
+  selector:
+    {{- include "twilight.selectorLabels" (dict "name" "owner") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: owner
+  labels:
+    {{- include "twilight.labels" (dict "name" "owner" "Release" .Release) | nindent 4 }}
+spec:
+  replicas: {{ .Values.services.owner.replicas }}
+  selector:
+    matchLabels:
+      {{- include "twilight.selectorLabels" (dict "name" "owner") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "twilight.selectorLabels" (dict "name" "owner") | nindent 8 }}
+    spec:
+      securityContext:
+        fsGroup: 10001
+      initContainers:
+        - name: wait-for-postgres
+          image: {{ .Values.postgres.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "until pg_isready -h postgres -U {{ .Values.postgres.username }} -d {{ .Values.postgres.database }}; do sleep 2; done"]
+      containers:
+        - name: owner
+          image: {{ include "twilight.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/owner", "-config", "/etc/twilight/config/owner.json"]
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.services.owner.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/twilight/config
+              readOnly: true
+            - name: secrets
+              mountPath: /etc/twilight/secrets
+              readOnly: true
+            - name: pod-info
+              mountPath: /etc/twilight/pod
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: twilight-config
+            items:
+              - key: owner.json
+                path: owner.json
+        - name: secrets
+          secret:
+            secretName: {{ include "twilight.secretName" . }}
+        - name: pod-info
+          downwardAPI:
+            items:
+              - path: name
+                fieldRef:
+                  fieldPath: metadata.name
