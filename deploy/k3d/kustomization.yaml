@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: twilight
+
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - services.yaml
+
+configMapGenerator:
+  - name: twilight-config
+    files:
+      - owner.json=config/owner.json
+      - worker.json=config/worker.json
+      - model-backend.json=config/model-backend.json
+      - tool-backend.json=config/tool-backend.json
+  - name: twilight-models
+    files:
+      - models.json=config/models.json
+
+generatorOptions:
+  disableNameSuffixHash: true

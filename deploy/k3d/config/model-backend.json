@@ -1,0 +1,6 @@
+{
+  "listen": ":8082",
+  "catalog": "/etc/twilight/models/models.json",
+  "secrets": "/etc/twilight/secrets",
+  "streaming": true
+}

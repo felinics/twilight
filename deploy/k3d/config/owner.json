@@ -1,0 +1,14 @@
+{
+  "identity": {"file": "/etc/twilight/pod/name"},
+  "listen": ":8080",
+  "stores": {"postgres": {"dsnFile": "/etc/twilight/secrets/postgres-dsn"}},
+  "executor": "http://worker:8081",
+  "toolBackend": "http://tool-backend:8083",
+  "lease": "1m",
+  "inboxPoll": "1s",
+  "activation": {"preset": "default", "idleRelease": "30s", "scan": "5s"},
+  "snapshotAfterTurn": true,
+  "presets": [
+    {"id": "default", "model": "chat", "systemPrompt": "You are a coding assistant working in the bound workspace.", "workspaceTools": true}
+  ]
+}

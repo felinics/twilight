@@ -1,0 +1,8 @@
+{
+  "identity": {"file": "/etc/twilight/pod/name"},
+  "listen": ":8081",
+  "executions": {"postgres": {"dsnFile": "/etc/twilight/secrets/postgres-dsn"}},
+  "lease": "30s",
+  "backends": {"model": "http://model-backend:8082", "tool": "http://tool-backend:8083"},
+  "retry": {"maxAttempts": 3, "backoff": "50ms"}
+}

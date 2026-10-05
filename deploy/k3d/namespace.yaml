@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: twilight
+  labels:
+    app.kubernetes.io/name: twilight
+    app.kubernetes.io/part-of: twilight

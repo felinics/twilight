@@ -1,0 +1,10 @@
+{
+  "models": [
+    {
+      "ref": "chat",
+      "kind": "openai",
+      "model": "gpt-4o-mini",
+      "apiKeySecret": "OPENAI_API_KEY"
+    }
+  ]
+}
