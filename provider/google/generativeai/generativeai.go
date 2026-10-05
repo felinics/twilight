@@ -856,14 +856,18 @@ func generateID() string {
 func convertUsage(u *usageMetadata) sdk.Usage {
 	candidateTokens := u.CandidatesTokenCount
 	thoughtTokens := u.ThoughtsTokenCount
-	cachedTokens := u.CachedContentTokenCount
+	cachedTokens := 0
+	if u.CachedContentTokenCount != nil {
+		cachedTokens = *u.CachedContentTokenCount
+	}
 
 	return sdk.Usage{
-		InputTokens:       u.PromptTokenCount,
-		OutputTokens:      candidateTokens + thoughtTokens,
-		TotalTokens:       u.TotalTokenCount,
-		ReasoningTokens:   thoughtTokens,
-		CachedInputTokens: cachedTokens,
+		InputTokens:             u.PromptTokenCount,
+		OutputTokens:            candidateTokens + thoughtTokens,
+		TotalTokens:             u.TotalTokenCount,
+		ReasoningTokens:         thoughtTokens,
+		CachedInputTokens:       cachedTokens,
+		CacheReadTokensReported: u.CachedContentTokenCount != nil,
 		InputTokenDetails: sdk.InputTokenDetail{
 			NoCacheTokens:   u.PromptTokenCount - cachedTokens,
 			CacheReadTokens: cachedTokens,

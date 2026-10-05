@@ -890,6 +890,8 @@ func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.St
 		if err != nil {
 			h.send(&sdk.ErrorPart{Error: fmt.Errorf("anthropic: stream failed: %w", err)})
 			finish = sdk.FinishReasonError
+		} else {
+			h.emitFinishStep()
 		}
 
 		h.send(&sdk.FinishPart{
@@ -913,6 +915,7 @@ type streamHandler struct {
 	rawFinishReason string
 	finishReason    sdk.FinishReason
 	usage           sdk.Usage
+	rawUsage        messagesUsage
 	messageID       string
 	messageModel    string
 }
@@ -963,7 +966,8 @@ func (h *streamHandler) onMessageStart(event *streamEvent) {
 	}
 	h.messageID = event.Message.ID
 	h.messageModel = event.Message.Model
-	h.usage = convertUsage(&event.Message.Usage)
+	h.rawUsage = event.Message.Usage
+	h.usage = convertUsage(&h.rawUsage)
 }
 
 func (h *streamHandler) onBlockStart(event *streamEvent) {
@@ -1076,14 +1080,17 @@ func (h *streamHandler) onBlockStop(event *streamEvent) {
 }
 
 func (h *streamHandler) onMessageDelta(event *streamEvent) {
-	if event.Delta != nil {
+	if event.Delta != nil && event.Delta.StopReason != "" {
 		h.rawFinishReason = event.Delta.StopReason
 		h.finishReason = mapFinishReason(h.rawFinishReason)
 	}
 	if event.Usage != nil {
-		h.usage.OutputTokens = event.Usage.OutputTokens
-		h.usage.TotalTokens = h.usage.InputTokens + h.usage.OutputTokens
+		h.rawUsage.applyDelta(event.Usage)
+		h.usage = convertUsage(&h.rawUsage)
 	}
+}
+
+func (h *streamHandler) emitFinishStep() {
 	h.send(&sdk.FinishStepPart{
 		FinishReason:    h.finishReason,
 		RawFinishReason: h.rawFinishReason,
@@ -1129,10 +1136,14 @@ func generateID() string {
 }
 
 func convertUsage(u *messagesUsage) sdk.Usage {
-	input := u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
+	cacheRead := 0
+	if u.CacheReadInputTokens != nil {
+		cacheRead = *u.CacheReadInputTokens
+	}
+	input := u.InputTokens + cacheRead + u.CacheCreationInputTokens
 	detail := sdk.InputTokenDetail{
 		NoCacheTokens:    u.InputTokens,
-		CacheReadTokens:  u.CacheReadInputTokens,
+		CacheReadTokens:  cacheRead,
 		CacheWriteTokens: u.CacheCreationInputTokens,
 	}
 	if u.CacheCreation != nil {
@@ -1140,11 +1151,12 @@ func convertUsage(u *messagesUsage) sdk.Usage {
 		detail.CacheWrite1hTokens = u.CacheCreation.Ephemeral1hInputTokens
 	}
 	return sdk.Usage{
-		InputTokens:       input,
-		OutputTokens:      u.OutputTokens,
-		TotalTokens:       input + u.OutputTokens,
-		CachedInputTokens: u.CacheReadInputTokens,
-		InputTokenDetails: detail,
+		InputTokens:             input,
+		OutputTokens:            u.OutputTokens,
+		TotalTokens:             input + u.OutputTokens,
+		CachedInputTokens:       cacheRead,
+		CacheReadTokensReported: u.CacheReadInputTokens != nil,
+		InputTokenDetails:       detail,
 	}
 }
 

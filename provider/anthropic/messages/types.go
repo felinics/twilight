@@ -142,8 +142,51 @@ type messagesUsage struct {
 	InputTokens              int                  `json:"input_tokens"`
 	OutputTokens             int                  `json:"output_tokens"`
 	CacheCreationInputTokens int                  `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int                  `json:"cache_read_input_tokens,omitempty"`
+	CacheReadInputTokens     *int                 `json:"cache_read_input_tokens,omitempty"`
 	CacheCreation            *cacheCreationDetail `json:"cache_creation,omitempty"`
+}
+
+type messagesUsageDelta struct {
+	InputTokens              *int `json:"input_tokens"`
+	OutputTokens             *int `json:"output_tokens"`
+	CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     *int `json:"cache_read_input_tokens"`
+	CacheCreation            *struct {
+		Ephemeral5mInputTokens *int `json:"ephemeral_5m_input_tokens"`
+		Ephemeral1hInputTokens *int `json:"ephemeral_1h_input_tokens"`
+	} `json:"cache_creation"`
+}
+
+func (u *messagesUsage) applyDelta(delta *messagesUsageDelta) {
+	if delta.InputTokens != nil {
+		u.InputTokens = *delta.InputTokens
+	}
+	if delta.OutputTokens != nil {
+		u.OutputTokens = *delta.OutputTokens
+	}
+	if delta.CacheReadInputTokens != nil {
+		u.CacheReadInputTokens = delta.CacheReadInputTokens
+	}
+	if delta.CacheCreationInputTokens != nil {
+		if *delta.CacheCreationInputTokens == 0 || (*delta.CacheCreationInputTokens != u.CacheCreationInputTokens && delta.CacheCreation == nil) {
+			u.CacheCreation = nil
+		}
+		u.CacheCreationInputTokens = *delta.CacheCreationInputTokens
+	}
+	if delta.CacheCreation != nil {
+		if u.CacheCreation == nil {
+			u.CacheCreation = &cacheCreationDetail{}
+		}
+		if delta.CacheCreation.Ephemeral5mInputTokens != nil {
+			u.CacheCreation.Ephemeral5mInputTokens = *delta.CacheCreation.Ephemeral5mInputTokens
+		}
+		if delta.CacheCreation.Ephemeral1hInputTokens != nil {
+			u.CacheCreation.Ephemeral1hInputTokens = *delta.CacheCreation.Ephemeral1hInputTokens
+		}
+		if u.CacheCreation.Ephemeral5mInputTokens+u.CacheCreation.Ephemeral1hInputTokens > u.CacheCreationInputTokens {
+			u.CacheCreation = nil
+		}
+	}
 }
 
 // --- Streaming event types ---
@@ -163,7 +206,7 @@ type streamEvent struct {
 	Delta *streamDelta `json:"delta,omitempty"`
 
 	// message_delta
-	Usage *messagesUsage `json:"usage,omitempty"`
+	Usage *messagesUsageDelta `json:"usage,omitempty"`
 }
 
 type streamDelta struct {

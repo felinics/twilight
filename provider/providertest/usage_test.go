@@ -44,11 +44,12 @@ func TestInputUsageContract(t *testing.T) {
 		}},
 	}
 	cases := []struct {
-		name   string
-		wire   map[string]string
-		input  int
-		output int
-		detail sdk.InputTokenDetail
+		name     string
+		wire     map[string]string
+		input    int
+		output   int
+		detail   sdk.InputTokenDetail
+		reported bool
 	}{
 		{name: "missing usage"},
 		{
@@ -71,7 +72,38 @@ func TestInputUsageContract(t *testing.T) {
 			input: 100, output: 5, detail: sdk.InputTokenDetail{NoCacheTokens: 100},
 		},
 		{
-			name: "zero cache details",
+			name: "null usage",
+			wire: map[string]string{"anthropic": "null", "chat": "null", "responses": "null", "google": "null"},
+		},
+		{
+			name: "null cache field",
+			wire: map[string]string{
+				"anthropic": `{"input_tokens":100,"output_tokens":5,"cache_read_input_tokens":null}`,
+				"chat":      `{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105,"prompt_tokens_details":{"cached_tokens":null}}`,
+				"responses": `{"input_tokens":100,"output_tokens":5,"input_tokens_details":{"cached_tokens":null}}`,
+				"google":    `{"promptTokenCount":100,"candidatesTokenCount":5,"totalTokenCount":105,"cachedContentTokenCount":null}`,
+			},
+			input: 100, output: 5, detail: sdk.InputTokenDetail{NoCacheTokens: 100},
+		},
+		{
+			name: "null cache details",
+			wire: map[string]string{
+				"chat":      `{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105,"prompt_tokens_details":null}`,
+				"responses": `{"input_tokens":100,"output_tokens":5,"input_tokens_details":null}`,
+			},
+			input: 100, output: 5, detail: sdk.InputTokenDetail{NoCacheTokens: 100},
+		},
+		{
+			name: "details without cache read",
+			wire: map[string]string{
+				"chat":      `{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105,"prompt_tokens_details":{}}`,
+				"responses": `{"input_tokens":100,"output_tokens":5,"input_tokens_details":{}}`,
+			},
+			input: 100, output: 5, detail: sdk.InputTokenDetail{NoCacheTokens: 100},
+		},
+		{
+			name:     "zero cache details",
+			reported: true,
 			wire: map[string]string{
 				"anthropic": `{"input_tokens":100,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}`,
 				"chat":      `{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105,"prompt_tokens_details":{"cached_tokens":0}}`,
@@ -81,7 +113,8 @@ func TestInputUsageContract(t *testing.T) {
 			input: 100, output: 5, detail: sdk.InputTokenDetail{NoCacheTokens: 100},
 		},
 		{
-			name: "partial cache read",
+			name:     "partial cache read",
+			reported: true,
 			wire: map[string]string{
 				"anthropic": `{"input_tokens":80,"output_tokens":5,"cache_read_input_tokens":20}`,
 				"chat":      `{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105,"prompt_tokens_details":{"cached_tokens":20}}`,
@@ -91,7 +124,8 @@ func TestInputUsageContract(t *testing.T) {
 			input: 100, output: 5, detail: sdk.InputTokenDetail{NoCacheTokens: 80, CacheReadTokens: 20},
 		},
 		{
-			name: "full cache read",
+			name:     "full cache read",
+			reported: true,
 			wire: map[string]string{
 				"anthropic": `{"input_tokens":0,"output_tokens":5,"cache_read_input_tokens":100}`,
 				"chat":      `{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105,"prompt_tokens_details":{"cached_tokens":100}}`,
@@ -101,7 +135,8 @@ func TestInputUsageContract(t *testing.T) {
 			input: 100, output: 5, detail: sdk.InputTokenDetail{CacheReadTokens: 100},
 		},
 		{
-			name: "mixed cache lifetimes",
+			name:     "mixed cache lifetimes",
+			reported: true,
 			wire: map[string]string{
 				"anthropic": `{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":20,"cache_creation_input_tokens":70,"cache_creation":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":40}}`,
 			},
@@ -121,6 +156,9 @@ func TestInputUsageContract(t *testing.T) {
 						if got.InputTokens != tc.input || got.OutputTokens != tc.output || got.TotalTokens != tc.input+tc.output ||
 							got.InputTokenDetails != tc.detail || got.CachedInputTokens != tc.detail.CacheReadTokens {
 							t.Errorf("%s: usage = %+v, want input=%d output=%d details=%+v", label, got, tc.input, tc.output, tc.detail)
+						}
+						if got.CacheReadTokensReported != tc.reported {
+							t.Errorf("%s: cache reporting = %t, want %t", label, got.CacheReadTokensReported, tc.reported)
 						}
 						d := got.InputTokenDetails
 						if got.InputTokens != d.NoCacheTokens+d.CacheReadTokens+d.CacheWriteTokens {

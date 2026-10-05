@@ -151,7 +151,7 @@ type codexUsage struct {
 }
 
 type codexInputTokenDetails struct {
-	CachedTokens int `json:"cached_tokens"`
+	CachedTokens *int `json:"cached_tokens,omitempty"`
 }
 
 type codexOutputTokenDetails struct {

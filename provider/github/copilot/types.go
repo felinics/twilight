@@ -129,7 +129,7 @@ type chatUsage struct {
 }
 
 type chatPromptTokenDetails struct {
-	CachedTokens int `json:"cached_tokens"`
+	CachedTokens *int `json:"cached_tokens,omitempty"`
 }
 
 type chatCompletionTokenDetails struct {

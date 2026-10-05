@@ -34,15 +34,18 @@ type Usage struct {
 	ReasoningTokens int `json:"reasoningTokens,omitempty"`
 	// CachedInputTokens equals InputTokenDetails.CacheReadTokens.
 	CachedInputTokens int `json:"cachedInputTokens,omitempty"`
+	// CacheReadTokensReported is true when the provider explicitly reports cache reads, including zero.
+	CacheReadTokensReported bool `json:"cacheReadTokensReported"`
 	// InputTokenDetails partitions InputTokens; cache TTL details are subsets.
 	InputTokenDetails  InputTokenDetail  `json:"inputTokenDetails,omitempty"`
 	OutputTokenDetails OutputTokenDetail `json:"outputTokenDetails,omitempty"`
 }
 
-// Add returns the field-by-field sum of u and other.
+// Add sums counters and reports cache reads only when both usages report them.
 //
 //nolint:gocritic // hugeParam: Add is a pure value operation and must not mutate caller-owned Usage.
 func (u Usage) Add(other Usage) Usage {
+	u.CacheReadTokensReported = u.CacheReadTokensReported && other.CacheReadTokensReported
 	u.InputTokens += other.InputTokens
 	u.OutputTokens += other.OutputTokens
 	u.TotalTokens += other.TotalTokens

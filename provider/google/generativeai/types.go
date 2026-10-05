@@ -137,11 +137,11 @@ type candidate struct {
 }
 
 type usageMetadata struct {
-	PromptTokenCount        int `json:"promptTokenCount"`
-	CandidatesTokenCount    int `json:"candidatesTokenCount"`
-	TotalTokenCount         int `json:"totalTokenCount"`
-	CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
-	ThoughtsTokenCount      int `json:"thoughtsTokenCount,omitempty"`
+	PromptTokenCount        int  `json:"promptTokenCount"`
+	CandidatesTokenCount    int  `json:"candidatesTokenCount"`
+	TotalTokenCount         int  `json:"totalTokenCount"`
+	CachedContentTokenCount *int `json:"cachedContentTokenCount,omitempty"`
+	ThoughtsTokenCount      int  `json:"thoughtsTokenCount,omitempty"`
 }
 
 type promptFeedback struct {
