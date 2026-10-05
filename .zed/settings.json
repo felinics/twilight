@@ -1,0 +1,9 @@
+{
+  "file_types": {
+    "Helm": [
+      "**/templates/**/*.tpl",
+      "**/templates/**/*.yaml",
+      "**/templates/**/*.yml"
+    ]
+  }
+}
