@@ -15,16 +15,37 @@ import (
 )
 
 // Main runs one component: name is the binary's name for messages, compose
-// builds the component from its document, listen extracts the address.
+// builds the component from its document, listen extracts the address. The
+// config path is required for service binaries.
 func Main[C any](name string, compose func(context.Context, C) (serve.Component, error), listen func(C) string) {
+	mainWithConfig(name, compose, listen, nil)
+}
+
+// MainWithDefaultConfig is like Main, but discovers a config when -config is
+// omitted. It is intended for the human-facing local agent, not service
+// binaries whose deployment always mounts an explicit document.
+func MainWithDefaultConfig[C any](name string, compose func(context.Context, C) (serve.Component, error), listen func(C) string, discover func() (string, error)) {
+	mainWithConfig(name, compose, listen, discover)
+}
+
+func mainWithConfig[C any](name string, compose func(context.Context, C) (serve.Component, error), listen func(C) string, discover func() (string, error)) {
 	fs := flag.NewFlagSet(name, flag.ExitOnError)
 	path := fs.String("config", "", "path of the component's configuration document")
 	_ = fs.Parse(os.Args[1:])
-	if *path == "" {
+	configPath := *path
+	if configPath == "" && discover != nil {
+		var err error
+		configPath, err = discover()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+			os.Exit(2)
+		}
+	}
+	if configPath == "" {
 		fmt.Fprintf(os.Stderr, "%s: -config is required\n", name)
 		os.Exit(2)
 	}
-	cfg, err := config.LoadFile[C](*path)
+	cfg, err := config.LoadFile[C](configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
 		os.Exit(2)
