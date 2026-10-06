@@ -24,10 +24,8 @@ func TestComposeFileBuildsOneProcessAgent(t *testing.T) {
 	}
 
 	ag, err := localagent.ComposeFile(context.Background(), localagent.FileConfig{
-		Root:    filepath.Join(root, "data"),
-		Catalog: catalog,
-		Secrets: secrets,
-		Model:   "chat",
+		Storage: localagent.StorageConfig{DataDir: filepath.Join(root, "data")},
+		Models:  localagent.ModelsConfig{Catalog: catalog, SecretsDir: secrets, Default: "chat"},
 	})
 	if err != nil {
 		t.Fatal(err)

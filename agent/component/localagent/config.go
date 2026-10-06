@@ -31,80 +31,103 @@ import (
 // agent. It intentionally describes the product, not its internal Worker,
 // model-backend, and tool-backend processes.
 type FileConfig struct {
-	// Listen is the only network address in local mode: the application's
-	// command API. It defaults to 127.0.0.1:8080.
+	Server    ServerConfig    `json:"server,omitempty"`
+	Workspace WorkspaceConfig `json:"workspace,omitempty"`
+	Storage   StorageConfig   `json:"storage,omitempty"`
+	Models    ModelsConfig    `json:"models,omitempty"`
+	Agent     AgentConfig     `json:"agent,omitempty"`
+}
+
+// ServerConfig controls the one HTTP command API exposed by local mode.
+type ServerConfig struct {
 	Listen string `json:"listen,omitempty"`
-	// Root contains the local database, Session ledger and CAS. It defaults
-	// to ./var/twilight; it is not the user's workspace.
-	Root string `json:"root,omitempty"`
-	// Workspace is the existing local directory the agent operates on. It
-	// defaults to the current working directory.
-	Workspace string `json:"workspace,omitempty"`
-	// Catalog is an agent/models.File. It defaults to ./models.json.
-	Catalog string `json:"catalog,omitempty"`
-	// Secrets is a directory containing one file per model credential.
-	Secrets string `json:"secrets,omitempty"`
-	// Model is the logical model reference used by the default preset.
-	Model        run.ModelRef `json:"model"`
-	SystemPrompt string       `json:"systemPrompt,omitempty"`
-	// WorkspaceTools enables the built-in local workspace tools. It defaults
-	// to true; set it to false to run a model-only local agent.
-	WorkspaceTools *bool `json:"workspaceTools,omitempty"`
-	// Lease and InboxPoll tune local ownership. They are optional because
-	// local mode has one owner and the useful defaults are safe.
-	Lease     config.Duration `json:"lease,omitempty"`
-	InboxPoll config.Duration `json:"inboxPoll,omitempty"`
+}
+
+// WorkspaceConfig selects the directory operated on by workspace tools. An
+// empty Path means the process working directory.
+type WorkspaceConfig struct {
+	Path  string `json:"path,omitempty"`
+	Tools *bool  `json:"tools,omitempty"`
+}
+
+// StorageConfig contains Twilight-owned state and never the user workspace.
+type StorageConfig struct {
+	DataDir string `json:"dataDir,omitempty"`
+}
+
+// ModelsConfig selects the model catalog and its credential directory.
+type ModelsConfig struct {
+	Catalog    string       `json:"catalog,omitempty"`
+	SecretsDir string       `json:"secretsDir,omitempty"`
+	Default    run.ModelRef `json:"default"`
+}
+
+// AgentConfig contains conversation and local ownership behavior.
+type AgentConfig struct {
+	SystemPrompt string          `json:"systemPrompt,omitempty"`
+	Lease        config.Duration `json:"lease,omitempty"`
+	InboxPoll    config.Duration `json:"inboxPoll,omitempty"`
 }
 
 const (
 	defaultListen         = "127.0.0.1:8080"
-	defaultRoot           = "./var/twilight"
-	defaultCatalog        = "./models.json"
-	defaultSecrets        = "./var/secrets"
 	defaultLease          = 5 * time.Minute
 	defaultInboxPoll      = time.Second
 	defaultIdleRelease    = 30 * time.Second
 	defaultActivationScan = 5 * time.Second
 )
 
-func (c FileConfig) defaults() FileConfig {
-	if c.Listen == "" {
-		c.Listen = defaultListen
+func (c FileConfig) defaults() (FileConfig, error) {
+	paths, err := config.UserPaths()
+	if err != nil {
+		return FileConfig{}, err
 	}
-	if c.Root == "" {
-		c.Root = defaultRoot
+	if c.Server.Listen == "" {
+		c.Server.Listen = defaultListen
 	}
-	if c.Workspace == "" {
-		c.Workspace = "."
+	if c.Storage.DataDir == "" {
+		c.Storage.DataDir = paths.StateDir
 	}
-	if c.Catalog == "" {
-		c.Catalog = defaultCatalog
+	if c.Workspace.Path == "" {
+		c.Workspace.Path = "."
 	}
-	if c.Secrets == "" {
-		c.Secrets = defaultSecrets
+	if c.Models.Catalog == "" {
+		c.Models.Catalog = paths.Models
 	}
-	if c.Lease.Std() == 0 {
-		c.Lease = config.Duration(defaultLease)
+	if c.Models.SecretsDir == "" {
+		c.Models.SecretsDir = paths.Secrets
 	}
-	if c.InboxPoll.Std() == 0 {
-		c.InboxPoll = config.Duration(defaultInboxPoll)
+	if c.Agent.Lease.Std() == 0 {
+		c.Agent.Lease = config.Duration(defaultLease)
 	}
-	if c.WorkspaceTools == nil {
+	if c.Agent.InboxPoll.Std() == 0 {
+		c.Agent.InboxPoll = config.Duration(defaultInboxPoll)
+	}
+	if c.Workspace.Tools == nil {
 		enabled := true
-		c.WorkspaceTools = &enabled
+		c.Workspace.Tools = &enabled
 	}
-	return c
+	return c, nil
+}
+
+// ListenAddr returns the local command API address after applying its
+// process-local default.
+func (c FileConfig) ListenAddr() string {
+	if c.Server.Listen == "" {
+		return defaultListen
+	}
+	return c.Server.Listen
 }
 
 func (c FileConfig) validate() error {
-	if c.Model == "" {
-		return errors.New("localagent: model is required")
+	if c.Models.Default == "" {
+		return errors.New("localagent: models.default is required")
 	}
-	if c.Root == "" || c.Workspace == "" || c.Catalog == "" || c.Secrets == "" {
-		return errors.New("localagent: root, workspace, catalog and secrets must not be empty")
+	if c.Storage.DataDir == "" || c.Workspace.Path == "" || c.Models.Catalog == "" || c.Models.SecretsDir == "" {
+		return errors.New("localagent: storage.dataDir, workspace.path, models.catalog and models.secretsDir must not be empty")
 	}
-	if c.Lease.Std() <= 0 || c.InboxPoll.Std() <= 0 {
-		return errors.New("localagent: lease and inboxPoll must be positive")
+	if c.Agent.Lease.Std() <= 0 || c.Agent.InboxPoll.Std() <= 0 {
+		return errors.New("localagent: agent.lease and agent.inboxPoll must be positive")
 	}
 	return nil
 }
@@ -119,27 +142,30 @@ type Service struct {
 
 // ComposeFile builds a local agent from one user-facing configuration.
 func ComposeFile(ctx context.Context, raw FileConfig) (*Service, error) {
-	cfg := raw.defaults()
+	cfg, err := raw.defaults()
+	if err != nil {
+		return nil, err
+	}
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(cfg.Root, 0o750); err != nil {
-		return nil, fmt.Errorf("localagent: root: %w", err)
+	if err := os.MkdirAll(cfg.Storage.DataDir, 0o700); err != nil {
+		return nil, fmt.Errorf("localagent: storage.dataDir: %w", err)
 	}
-	if err := os.MkdirAll(cfg.Secrets, 0o750); err != nil {
-		return nil, fmt.Errorf("localagent: secrets: %w", err)
+	if err := os.MkdirAll(cfg.Models.SecretsDir, 0o700); err != nil {
+		return nil, fmt.Errorf("localagent: models.secretsDir: %w", err)
 	}
 
-	entries, err := models.LoadFile(cfg.Catalog)
+	entries, err := models.LoadFile(cfg.Models.Catalog)
 	if err != nil {
 		return nil, fmt.Errorf("localagent: catalog: %w", err)
 	}
-	catalog, err := models.Build(ctx, entries, secrets.Dir(cfg.Secrets))
+	catalog, err := models.Build(ctx, entries, secrets.Dir(cfg.Models.SecretsDir))
 	if err != nil {
 		return nil, fmt.Errorf("localagent: models: %w", err)
 	}
 
-	db, err := sqlite.Open(filepath.Join(cfg.Root, "agent.db"))
+	db, err := sqlite.Open(filepath.Join(cfg.Storage.DataDir, "agent.db"))
 	if err != nil {
 		return nil, fmt.Errorf("localagent: database: %w", err)
 	}
@@ -148,15 +174,15 @@ func ComposeFile(ctx context.Context, raw FileConfig) (*Service, error) {
 		return nil, e
 	}
 
-	ledger, err := filestore.New(filepath.Join(cfg.Root, "sessions"))
+	ledger, err := filestore.New(filepath.Join(cfg.Storage.DataDir, "sessions"))
 	if err != nil {
 		return closeDB(fmt.Errorf("localagent: sessions: %w", err))
 	}
-	content, err := filestore.NewContentStore(filepath.Join(cfg.Root, "content"), sessionstore.FrozenAuthority, filestore.ContentStoreOptions{})
+	content, err := filestore.NewContentStore(filepath.Join(cfg.Storage.DataDir, "content"), sessionstore.FrozenAuthority, filestore.ContentStoreOptions{})
 	if err != nil {
 		return closeDB(fmt.Errorf("localagent: content: %w", err))
 	}
-	workspaceRoot, err := filepath.Abs(cfg.Workspace)
+	workspaceRoot, err := filepath.Abs(cfg.Workspace.Path)
 	if err != nil {
 		return closeDB(fmt.Errorf("localagent: workspace: %w", err))
 	}
@@ -169,11 +195,11 @@ func ComposeFile(ctx context.Context, raw FileConfig) (*Service, error) {
 	if err != nil {
 		return closeDB(fmt.Errorf("localagent: workspace tools: %w", err))
 	}
-	presetOpts := []app.PresetOption{app.WithSystemPrompt(cfg.SystemPrompt)}
-	if cfg.WorkspaceTools != nil && *cfg.WorkspaceTools {
+	presetOpts := []app.PresetOption{app.WithSystemPrompt(cfg.Agent.SystemPrompt)}
+	if cfg.Workspace.Tools != nil && *cfg.Workspace.Tools {
 		presetOpts = append(presetOpts, app.WithTools(defs...))
 	}
-	preset, err := app.NewPresetFromDefinitions(cfg.Model, nil, presetOpts...)
+	preset, err := app.NewPresetFromDefinitions(cfg.Models.Default, nil, presetOpts...)
 	if err != nil {
 		return closeDB(fmt.Errorf("localagent: preset: %w", err))
 	}
@@ -187,7 +213,7 @@ func ComposeFile(ctx context.Context, raw FileConfig) (*Service, error) {
 				Bindings: bindings,
 				Ledger:   db.Ledger(artifact.SetBuilder{Resolver: bindings}),
 			},
-			Ownership: session.OpenOptions{Owner: "local", LeaseDuration: cfg.Lease.Std()},
+			Ownership: session.OpenOptions{Owner: "local", LeaseDuration: cfg.Agent.Lease.Std()},
 		},
 		Execution: rt.ExecutionConfig{Redispatches: db.Redispatches()},
 		Inbox:     db.Inbox(),
@@ -196,7 +222,7 @@ func ComposeFile(ctx context.Context, raw FileConfig) (*Service, error) {
 			Preset:      "default",
 			IdleRelease: defaultIdleRelease,
 			Scan:        defaultActivationScan,
-			Options:     app.SessionOptions{InboxPoll: cfg.InboxPoll.Std()},
+			Options:     app.SessionOptions{InboxPoll: cfg.Agent.InboxPoll.Std()},
 		},
 		Workspaces: &app.WorkspaceConfig{Store: db.Workspaces(), SnapshotAfterTurn: false},
 	}
@@ -205,13 +231,13 @@ func ComposeFile(ctx context.Context, raw FileConfig) (*Service, error) {
 		Config:     appCfg,
 		Models:     catalog.Invokers(),
 		Executions: db.Executions(),
-		Worker:     executor.WorkerOptions{ID: "local", LeaseDuration: cfg.Lease.Std()},
+		Worker:     executor.WorkerOptions{ID: "local", LeaseDuration: cfg.Agent.Lease.Std()},
 		Sandbox:    &SandboxConfig{Provider: provider, Backend: local.Backend, Tools: tools.Default()},
 	})
 	if err != nil {
 		return closeDB(fmt.Errorf("localagent: compose: %w", err))
 	}
-	return &Service{Agent: ag, server: &apphttp.Server{App: ag.Application, Options: app.SessionOptions{InboxPoll: cfg.InboxPoll.Std()}}, db: db}, nil
+	return &Service{Agent: ag, server: &apphttp.Server{App: ag.Application, Options: app.SessionOptions{InboxPoll: cfg.Agent.InboxPoll.Std()}}, db: db}, nil
 }
 
 // Handler serves the single local command API.

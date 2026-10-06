@@ -56,6 +56,22 @@ func TestLoadIsStrict(t *testing.T) {
 	}
 }
 
+func TestUserPaths(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "/tmp/twilight-config")
+	t.Setenv("XDG_STATE_HOME", "/tmp/twilight-state")
+	paths, err := config.UserPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths.ConfigDir != "/tmp/twilight-config/twilight" || paths.StateDir != "/tmp/twilight-state/twilight" || paths.Models != "/tmp/twilight-config/twilight/models.json" || paths.Secrets != "/tmp/twilight-config/twilight/secrets" {
+		t.Fatalf("paths = %+v", paths)
+	}
+	t.Setenv("XDG_STATE_HOME", "relative")
+	if _, err := config.UserPaths(); err == nil {
+		t.Fatal("relative XDG_STATE_HOME accepted")
+	}
+}
+
 func TestStoreNamesExactlyOneBackend(t *testing.T) {
 	dsnFile := filepath.Join(t.TempDir(), "dsn")
 	if err := os.WriteFile(dsnFile, []byte("postgres://u:p@h/db\n"), 0o600); err != nil {
