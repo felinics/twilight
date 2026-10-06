@@ -33,3 +33,8 @@ go.work.sum
 # .vscode/
 
 tmp/
+
+# Local debug viewer dependencies and build output
+viewer/node_modules/
+viewer/dist/
+viewer/.vite/

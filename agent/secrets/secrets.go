@@ -1,10 +1,7 @@
-// Package secrets is the deployment's credential seam: a name in a
-// configuration document resolves to a value at startup, and how depends
-// on where the process runs. A cloud agent reads the directory a Kubernetes
-// Secret is mounted as (Dir); a local agent reads what it loaded from its
-// own configuration (Static); a host with a vault implements Resolver over
-// it. Consumers (the model catalog today; tools, workspaces and backends as
-// they need credentials) name secrets and never carry values.
+// Package secrets is the credential seam: a name in a configuration
+// document resolves to a value at startup. Resolvers can read a mounted
+// directory, process environment, in-memory test values, or a vault-backed
+// implementation. Consumers name secrets and never carry their values.
 package secrets
 
 import (
@@ -16,7 +13,8 @@ import (
 	"strings"
 )
 
-// Resolver reads one secret by name.
+// Resolver reads one secret by name. Local callers may compose Dir and Env
+// with Fallback; deployment callers can provide a mounted volume or vault.
 type Resolver interface {
 	Lookup(ctx context.Context, name string) (string, error)
 }

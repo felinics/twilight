@@ -24,6 +24,7 @@ import (
 	rt "github.com/felinics/twilight/agentcore/runtime"
 	"github.com/felinics/twilight/agentcore/session"
 	"github.com/felinics/twilight/agentcore/session/filestore"
+	"github.com/felinics/twilight/agentcore/session/writer"
 	"github.com/felinics/twilight/agentcore/sessionkernel"
 )
 
@@ -53,9 +54,14 @@ type WorkspaceConfig struct {
 // StorageConfig contains Twilight-owned state and never the user workspace.
 type StorageConfig struct {
 	DataDir string `json:"dataDir,omitempty"`
+	// Debug writes a human-readable sidecar trace while retaining the
+	// canonical ledger and content-addressed state for recovery.
+	Debug bool `json:"debug,omitempty"`
 }
 
-// ModelsConfig selects the model catalog and its credential directory.
+// ModelsConfig selects the model catalog and its credential directory. Local
+// mode falls back to an environment variable named by the catalog entry when
+// the credential file is absent.
 type ModelsConfig struct {
 	Catalog    string       `json:"catalog,omitempty"`
 	SecretsDir string       `json:"secretsDir,omitempty"`
@@ -160,7 +166,7 @@ func ComposeFile(ctx context.Context, raw FileConfig) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("localagent: catalog: %w", err)
 	}
-	catalog, err := models.Build(ctx, entries, secrets.Dir(cfg.Models.SecretsDir))
+	catalog, err := models.Build(ctx, entries, secrets.Fallback{secrets.Dir(cfg.Models.SecretsDir), secrets.Env{}})
 	if err != nil {
 		return nil, fmt.Errorf("localagent: models: %w", err)
 	}
@@ -174,13 +180,21 @@ func ComposeFile(ctx context.Context, raw FileConfig) (*Service, error) {
 		return nil, e
 	}
 
-	ledger, err := filestore.New(filepath.Join(cfg.Storage.DataDir, "sessions"))
+	ledger, err := filestore.New(cfg.Storage.DataDir)
 	if err != nil {
 		return closeDB(fmt.Errorf("localagent: sessions: %w", err))
 	}
 	content, err := filestore.NewContentStore(filepath.Join(cfg.Storage.DataDir, "content"), sessionstore.FrozenAuthority, filestore.ContentStoreOptions{})
 	if err != nil {
 		return closeDB(fmt.Errorf("localagent: content: %w", err))
+	}
+	var observers []writer.CommitObserver
+	if cfg.Storage.Debug {
+		debug, debugErr := newDebugObserver(filepath.Join(cfg.Storage.DataDir, "debug"), content)
+		if debugErr != nil {
+			return closeDB(debugErr)
+		}
+		observers = append(observers, debug)
 	}
 	workspaceRoot, err := filepath.Abs(cfg.Workspace.Path)
 	if err != nil {
@@ -214,6 +228,7 @@ func ComposeFile(ctx context.Context, raw FileConfig) (*Service, error) {
 				Ledger:   db.Ledger(artifact.SetBuilder{Resolver: bindings}),
 			},
 			Ownership: session.OpenOptions{Owner: "local", LeaseDuration: cfg.Agent.Lease.Std()},
+			Observers: observers,
 		},
 		Execution: rt.ExecutionConfig{Redispatches: db.Redispatches()},
 		Inbox:     db.Inbox(),
