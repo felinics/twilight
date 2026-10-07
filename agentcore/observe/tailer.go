@@ -73,85 +73,125 @@ func (l *SessionLedgerTailer) SubscribeFrom(ctx context.Context, sid session.Ses
 	if l.history == nil {
 		return nil, ErrNoHistory
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	t, err := l.acquire(sid)
-	if err != nil {
-		return nil, err
-	}
-	select {
-	case <-t.ready:
-	case <-ctx.Done():
-		t.releasePending()
-		return nil, ctx.Err()
-	}
-	if t.initErr != nil {
-		t.releasePending()
-		return nil, t.initErr
-	}
-	return t.attach(ctx, from)
-}
-
-func (l *SessionLedgerTailer) acquire(sid session.SessionID) (*sessionTail, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.closed {
-		return nil, ErrTailerClosed
-	}
-	if old := l.sessions[sid]; old != nil {
-		select {
-		case <-old.ctx.Done():
-			delete(l.sessions, sid)
-		default:
-			old.mu.Lock()
-			old.pending++
-			old.mu.Unlock()
-			return old, nil
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
+		t, err := l.acquire(ctx, sid)
+		if err != nil {
+			return nil, err
+		}
+		select {
+		case <-t.ready:
+		case <-ctx.Done():
+			t.releasePending()
+			return nil, ctx.Err()
+		}
+		if t.initErr != nil {
+			t.releasePending()
+			return nil, t.initErr
+		}
+		out, err := t.attach(ctx, from)
+		if !errors.Is(err, ErrTailerClosed) {
+			return out, err
+		}
+		// A shared tail can finish between acquisition and attachment after
+		// its last previous subscriber leaves or a poll fails. The tailer
+		// itself is still usable, so transparently acquire the replacement.
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t := &sessionTail{
-		owner: l, sid: sid, ctx: ctx, cancel: cancel,
-		ready: make(chan struct{}), active: make(chan struct{}), wake: make(chan struct{}, 1), done: make(chan struct{}),
-		subs: make(map[*durableSubscriber]struct{}), pending: 1,
-	}
-	l.sessions[sid] = t
-	go t.run()
-	return t, nil
 }
 
+func (l *SessionLedgerTailer) acquire(ctx context.Context, sid session.SessionID) (*sessionTail, error) {
+	for {
+		l.mu.Lock()
+		if l.closed {
+			l.mu.Unlock()
+			return nil, ErrTailerClosed
+		}
+		if old := l.sessions[sid]; old != nil {
+			old.mu.Lock()
+			if !old.stopping {
+				old.pending++
+				old.mu.Unlock()
+				l.mu.Unlock()
+				return old, nil
+			}
+			done := old.done
+			old.mu.Unlock()
+			l.mu.Unlock()
+			// Keep the stopping loop registered until it is completely done.
+			// This lets CloseContext account for every loop and avoids replacing
+			// it in the small detach-to-cancel window.
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		t := &sessionTail{
+			owner: l, sid: sid, ctx: ctx, cancel: cancel,
+			ready: make(chan struct{}), active: make(chan struct{}), wake: make(chan struct{}, 1), done: make(chan struct{}),
+			subs: make(map[*durableSubscriber]struct{}), pending: 1,
+		}
+		l.sessions[sid] = t
+		l.mu.Unlock()
+		go t.run()
+		return t, nil
+	}
+}
+
+// drop atomically removes a finished loop and publishes its completion.
+// CloseContext therefore either observes the loop in sessions and waits for
+// done, or observes it absent only after done has already closed.
 func (l *SessionLedgerTailer) drop(t *sessionTail) {
 	l.mu.Lock()
 	if l.sessions[t.sid] == t {
 		delete(l.sessions, t.sid)
 	}
+	close(t.done)
 	l.mu.Unlock()
 }
 
-// Close stops every Session loop and closes all durable subscriptions. It is
-// idempotent and waits until in-flight history reads have observed cancellation.
-func (l *SessionLedgerTailer) Close() {
+// Close stops every Session loop and waits without a deadline. Use
+// CloseContext when shutdown must respect a caller's budget.
+func (l *SessionLedgerTailer) Close() { _ = l.CloseContext(context.Background()) }
+
+// CloseContext stops every Session loop and closes all durable subscriptions.
+// It is idempotent. The first caller starts the shutdown; every caller waits
+// for it only until ctx ends, while shutdown itself continues in the
+// background so a later caller can still observe completion.
+func (l *SessionLedgerTailer) CloseContext(ctx context.Context) error {
 	l.mu.Lock()
-	if l.closed {
+	if !l.closed {
+		l.closed = true
+		tails := make([]*sessionTail, 0, len(l.sessions))
+		for _, t := range l.sessions {
+			t.mu.Lock()
+			t.stopping = true
+			t.mu.Unlock()
+			tails = append(tails, t)
+		}
+		for _, t := range tails {
+			t.cancel()
+		}
 		done := l.closeDone
-		l.mu.Unlock()
-		<-done
-		return
+		go func() {
+			for _, t := range tails {
+				<-t.done
+			}
+			close(done)
+		}()
 	}
-	l.closed = true
-	tails := make([]*sessionTail, 0, len(l.sessions))
-	for _, t := range l.sessions {
-		tails = append(tails, t)
-	}
+	done := l.closeDone
 	l.mu.Unlock()
-	for _, t := range tails {
-		t.cancel()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	for _, t := range tails {
-		<-t.done
-	}
-	close(l.closeDone)
 }
 
 type sessionTail struct {
@@ -170,20 +210,23 @@ type sessionTail struct {
 	cursor     ledger.CommitSeq
 	pending    int
 	subs       map[*durableSubscriber]struct{}
+	stopping   bool
 	activeOnce sync.Once
+	subsWG     sync.WaitGroup
 }
 
 func (t *sessionTail) run() {
 	defer func() {
 		t.cancel()
 		t.mu.Lock()
+		t.stopping = true
 		for s := range t.subs {
 			s.stop(nil)
 			delete(t.subs, s)
 		}
 		t.mu.Unlock()
+		t.subsWG.Wait()
 		t.owner.drop(t)
-		close(t.done)
 	}()
 
 	// Limit one is enough to obtain Head without making a first subscriber's
@@ -209,6 +252,9 @@ func (t *sessionTail) run() {
 		t.mu.Lock()
 		cursor := t.cursor
 		empty := len(t.subs) == 0 && t.pending == 0
+		if empty {
+			t.stopping = true
+		}
 		t.mu.Unlock()
 		if empty {
 			return
@@ -247,6 +293,9 @@ func (t *sessionTail) run() {
 			t.cursor = d.seq + 1
 		}
 		empty = len(t.subs) == 0 && t.pending == 0
+		if empty {
+			t.stopping = true
+		}
 		t.mu.Unlock()
 		if empty {
 			return
@@ -286,7 +335,7 @@ func (t *sessionTail) attach(ctx context.Context, from ledger.CommitSeq) (<-chan
 	if t.pending > 0 {
 		t.pending--
 	}
-	if err := t.ctx.Err(); err != nil {
+	if t.stopping || t.ctx.Err() != nil {
 		t.mu.Unlock()
 		cancel()
 		return nil, ErrTailerClosed
@@ -297,6 +346,7 @@ func (t *sessionTail) attach(ctx context.Context, from ledger.CommitSeq) (<-chan
 		s.liveFrom = from
 	}
 	t.subs[s] = struct{}{}
+	t.subsWG.Add(1)
 	t.activeOnce.Do(func() { close(t.active) })
 	t.mu.Unlock()
 	go s.run()
@@ -309,6 +359,9 @@ func (t *sessionTail) releasePending() {
 		t.pending--
 	}
 	empty := t.pending == 0 && len(t.subs) == 0
+	if empty {
+		t.stopping = true
+	}
 	t.mu.Unlock()
 	if empty {
 		t.cancel()
@@ -319,6 +372,9 @@ func (t *sessionTail) detach(s *durableSubscriber) {
 	t.mu.Lock()
 	delete(t.subs, s)
 	empty := t.pending == 0 && len(t.subs) == 0
+	if empty {
+		t.stopping = true
+	}
 	t.mu.Unlock()
 	if empty {
 		t.cancel()
@@ -327,6 +383,7 @@ func (t *sessionTail) detach(s *durableSubscriber) {
 
 func (t *sessionTail) failAll(err error) {
 	t.mu.Lock()
+	t.stopping = true
 	for s := range t.subs {
 		s.stop(err)
 		delete(t.subs, s)
@@ -377,10 +434,13 @@ func (s *durableSubscriber) stop(err error) {
 }
 
 func (s *durableSubscriber) run() {
+	defer s.tail.subsWG.Done()
 	defer close(s.out)
 	defer s.tail.detach(s)
 	if err := s.catchUp(); err != nil {
-		if s.ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+		if s.terminalError() != nil {
+			s.emitTerminalError()
+		} else if s.ctx.Err() == nil && !errors.Is(err, context.Canceled) {
 			s.emitError(err)
 		}
 		return
@@ -396,6 +456,7 @@ func (s *durableSubscriber) run() {
 			s.emitTerminalError()
 			return
 		case <-s.ctx.Done():
+			s.emitTerminalError()
 			return
 		}
 	}
@@ -418,7 +479,6 @@ func (s *durableSubscriber) catchUp() error {
 			}
 			for _, event := range decodeCommit(s.tail.owner.registry, s.tail.sid, commit) {
 				if err := s.send(event); err != nil {
-					s.emitTerminalError()
 					return err
 				}
 			}
@@ -452,11 +512,14 @@ func (s *durableSubscriber) send(event Event) error {
 	}
 }
 
-func (s *durableSubscriber) emitTerminalError() {
+func (s *durableSubscriber) terminalError() error {
 	s.errMu.Lock()
-	err := s.err
-	s.errMu.Unlock()
-	if err != nil {
+	defer s.errMu.Unlock()
+	return s.err
+}
+
+func (s *durableSubscriber) emitTerminalError() {
+	if err := s.terminalError(); err != nil {
 		s.emitError(err)
 	}
 }

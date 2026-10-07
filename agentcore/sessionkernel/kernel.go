@@ -186,7 +186,9 @@ func NewRegistry(extensions []module.ModuleDescriptor) (*module.Registry, error)
 // of other processes keep working; the execution side of a host closes first.
 func (a *Kernel) Close(ctx context.Context) error {
 	err := writer.CloseWriters(ctx, a.Writers)
-	a.Tailer.Close()
+	if terr := a.Tailer.CloseContext(ctx); err == nil {
+		err = terr
+	}
 	return err
 }
 
