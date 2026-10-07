@@ -7,6 +7,7 @@ package ownerservice
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	stdhttp "net/http"
@@ -21,6 +22,7 @@ import (
 	"github.com/felinics/twilight/agentcore/artifact"
 	"github.com/felinics/twilight/agentcore/preset"
 	"github.com/felinics/twilight/agentcore/run"
+	"github.com/felinics/twilight/agentcore/run/reconcile"
 	"github.com/felinics/twilight/agentcore/run/sessionstore"
 	rt "github.com/felinics/twilight/agentcore/runtime"
 	"github.com/felinics/twilight/agentcore/session"
@@ -62,11 +64,76 @@ type Config struct {
 	SnapshotAfterTurn bool `json:"snapshotAfterTurn,omitempty"`
 	// InboxPoll is the applier's poll interval (APP-INB-3).
 	InboxPoll config.Duration `json:"inboxPoll,omitempty"`
+	// MissingEffects decides what takeover does when the executor has no
+	// record for an executing effect. Empty and "dispose" preserve the
+	// compatibility behavior; "redispatch" re-offers the frozen assignment.
+	MissingEffects MissingEffectsPolicy `json:"missingEffects,omitempty"`
+	// MaxRedispatches bounds durable redispatch attempts per effect. Zero
+	// selects the runtime default.
+	MaxRedispatches int `json:"maxRedispatches,omitempty"`
+	// RedispatchRetry is the interval before retrying a temporary or unknown
+	// redispatch boundary. Zero selects the runtime default.
+	RedispatchRetry config.Duration `json:"redispatchRetry,omitempty"`
+	// OrphanProbe is how often waiting effects are checked for an orphaned
+	// worker record. Zero selects the runtime default.
+	OrphanProbe config.Duration `json:"orphanProbe,omitempty"`
 	// Activation makes this owner hold Sessions for active work only
 	// (APP-ACT): a command reaching it opens the Session, quiescence
 	// releases it, and a scan picks up Sessions left by a dead owner. It
 	// requires Lease, so a dead owner's Sessions expire.
 	Activation *Activation `json:"activation,omitempty"`
+}
+
+// MissingEffectsPolicy is the JSON vocabulary of the missing-effect policy.
+// Its zero value is dispose for backward compatibility. An explicitly empty
+// or unknown JSON value is rejected rather than silently selecting dispose.
+type MissingEffectsPolicy string
+
+const (
+	MissingEffectsDispose    MissingEffectsPolicy = "dispose"
+	MissingEffectsRedispatch MissingEffectsPolicy = "redispatch"
+)
+
+func (p *MissingEffectsPolicy) UnmarshalJSON(raw []byte) error {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return errors.New("missingEffects must be \"dispose\" or \"redispatch\"")
+	}
+	switch MissingEffectsPolicy(value) {
+	case MissingEffectsDispose, MissingEffectsRedispatch:
+		*p = MissingEffectsPolicy(value)
+		return nil
+	default:
+		return fmt.Errorf("missingEffects %q is invalid; want \"dispose\" or \"redispatch\"", value)
+	}
+}
+
+func (p MissingEffectsPolicy) runtimePolicy() (reconcile.MissingPolicy, error) {
+	switch p {
+	case "", MissingEffectsDispose:
+		return reconcile.DisposeMissing, nil
+	case MissingEffectsRedispatch:
+		return reconcile.RedispatchMissing, nil
+	default:
+		return reconcile.DisposeMissing, fmt.Errorf("ownerservice: missingEffects %q is invalid; want dispose or redispatch", p)
+	}
+}
+
+func (cfg Config) validateRecovery() (reconcile.MissingPolicy, error) {
+	missing, err := cfg.MissingEffects.runtimePolicy()
+	if err != nil {
+		return reconcile.DisposeMissing, err
+	}
+	if cfg.MaxRedispatches < 0 {
+		return reconcile.DisposeMissing, errors.New("ownerservice: maxRedispatches must not be negative")
+	}
+	if cfg.RedispatchRetry.Std() < 0 {
+		return reconcile.DisposeMissing, errors.New("ownerservice: redispatchRetry must not be negative")
+	}
+	if cfg.OrphanProbe.Std() < 0 {
+		return reconcile.DisposeMissing, errors.New("ownerservice: orphanProbe must not be negative")
+	}
+	return missing, nil
 }
 
 // Activation is the owner's activation model (APP-ACT).
@@ -116,6 +183,10 @@ func Compose(ctx context.Context, cfg Config) (*Component, error) { //nolint:goc
 	if err != nil {
 		return nil, err
 	}
+	missing, err := cfg.validateRecovery()
+	if err != nil {
+		return nil, err
+	}
 	switch {
 	case cfg.Executor == "":
 		return nil, errors.New("ownerservice: executor endpoint is required")
@@ -159,7 +230,10 @@ func Compose(ctx context.Context, cfg Config) (*Component, error) { //nolint:goc
 			Artifacts: sessionkernel.Artifacts{Bindings: bindings, Ledger: db.Ledger(artifact.SetBuilder{Resolver: bindings})},
 			Ownership: session.OpenOptions{Owner: id, LeaseDuration: cfg.Lease.Std(), Takeover: cfg.Takeover},
 		},
-		Execution:  rt.ExecutionConfig{Redispatches: db.Redispatches()},
+		Execution: rt.ExecutionConfig{
+			MissingEffects: missing, Redispatches: db.Redispatches(), MaxRedispatches: cfg.MaxRedispatches,
+			RedispatchRetry: cfg.RedispatchRetry.Std(), OrphanProbe: cfg.OrphanProbe.Std(),
+		},
 		Inbox:      db.Inbox(),
 		Workspaces: wsCfg,
 		Presets:    presets,

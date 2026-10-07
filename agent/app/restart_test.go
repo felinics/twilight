@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/felinics/twilight/agentcore/run/effect"
 	"github.com/felinics/twilight/agentcore/run/loop"
 	"github.com/felinics/twilight/agentcore/run/reconcile"
+	"github.com/felinics/twilight/agentcore/run/redispatch/redispatchtest"
 	"github.com/felinics/twilight/agentcore/run/sessionstore"
 	rt "github.com/felinics/twilight/agentcore/runtime"
 	"github.com/felinics/twilight/agentcore/session"
@@ -212,6 +214,173 @@ func TestRestartRedispatchesMissingEffect(t *testing.T) {
 	if final, err := runState(p2, sid, active.RunID); err != nil || final.State.ModelSteps != 1 {
 		t.Fatalf("model steps after redispatch = %d %v, want the one step that was redispatched", final.State.ModelSteps, err)
 	}
+	close(gate.release)
+	if err := <-sendErr; err == nil {
+		t.Fatal("the superseded process's Send settled without an ownership error")
+	}
+}
+
+// boundaryExecutor scripts a temporary redispatch boundary before handing
+// accepted assignments to recordingExecutor. Attach deliberately stays
+// missing until a dispatch succeeds, as a remote record store would.
+type boundaryExecutor struct {
+	recordingExecutor
+	boundaryMu sync.Mutex
+	failures   int
+	failure    error
+	calls      int
+	last       effect.AssignmentKey
+}
+
+func (e *boundaryExecutor) Dispatch(ctx context.Context, assignment effect.Assignment) error {
+	e.boundaryMu.Lock()
+	e.calls++
+	e.last = assignment.Key()
+	call := e.calls
+	e.boundaryMu.Unlock()
+	if e.failure != nil && (e.failures < 0 || call <= e.failures) {
+		return e.failure
+	}
+	return e.recordingExecutor.Dispatch(ctx, assignment)
+}
+
+func (e *boundaryExecutor) callCount() int {
+	e.boundaryMu.Lock()
+	defer e.boundaryMu.Unlock()
+	return e.calls
+}
+
+func (e *boundaryExecutor) lastKey() effect.AssignmentKey {
+	e.boundaryMu.Lock()
+	defer e.boundaryMu.Unlock()
+	return e.last
+}
+
+// A retryable first reconciliation is retried by the same open Session. It
+// does not need another takeover: the durable pending attempt is reloaded,
+// accepted, watched, and settled in that Session's Recovery lifetime.
+func TestRestartRedispatchRetryReconcilesWithoutTakeover(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	const sid session.SessionID = "s-redispatch-retry"
+	presetRef, ap, _, gate, sendErr := crashMidModel(t, root, sid)
+
+	store2, err := filestore.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content2, err := filestore.NewContentStore(root, sessionstore.FrozenAuthority, filestore.ContentStoreOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := &redispatchtest.Map{}
+	remote := &boundaryExecutor{recordingExecutor: recordingExecutor{reply: "recovered"}, failures: 3, failure: effect.ErrDispatchRetryable}
+	cfg := durablePorts(t, app.Config{
+		Kernel:    sessionkernel.Ports{Store: store2, Content: content2, Ownership: session.OpenOptions{Takeover: true}},
+		Execution: rt.ExecutionConfig{MissingEffects: reconcile.RedispatchMissing, Redispatches: attempts, RedispatchRetry: 5 * time.Millisecond},
+	})
+	cfg.Port = remote
+	p2 := newLocalHost(t, cfg, nil)
+	if _, err := p2.RegisterPreset("a1", ap); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := p2.OpenSession(ctx, sid, app.SessionOptions{Preset: presetRef})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s2.Recovered != 0 {
+		t.Fatalf("recovered = %d, want no disposal", s2.Recovered)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for remote.callCount() < 4 {
+		if time.Now().After(deadline) {
+			t.Fatalf("dispatch calls = %d, want retry after the first reconciliation", remote.callCount())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	key := remote.lastKey()
+	state, _, _, err := attempts.Load(ctx, key)
+	if err != nil || state.Planned != 1 || state.Dispatched != 1 {
+		t.Fatalf("redispatch state = %+v %v, want one accepted durable attempt", state, err)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		surface, err := p2.TurnSurface(ctx, sid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		completed := false
+		for _, status := range surface.Turns {
+			completed = completed || status.Status == turn.TurnCompleted
+		}
+		if completed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("redispatched turn did not complete")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	close(gate.release)
+	if err := <-sendErr; err == nil {
+		t.Fatal("the superseded process's Send settled without an ownership error")
+	}
+}
+
+// Unknown dispatch responses keep one planned attempt pending. Repeated
+// interval reconciliations replay that attempt without consuming more budget,
+// and closing the Session cancels the worker.
+func TestRedispatchUnknownPendingDoesNotConsumeBudgetAndCloseStops(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	const sid session.SessionID = "s-redispatch-unknown"
+	presetRef, ap, _, gate, sendErr := crashMidModel(t, root, sid)
+
+	store2, err := filestore.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content2, err := filestore.NewContentStore(root, sessionstore.FrozenAuthority, filestore.ContentStoreOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := &redispatchtest.Map{}
+	remote := &boundaryExecutor{failures: -1, failure: effect.ErrDispatchUnknown}
+	cfg := durablePorts(t, app.Config{
+		Kernel:    sessionkernel.Ports{Store: store2, Content: content2, Ownership: session.OpenOptions{Takeover: true}},
+		Execution: rt.ExecutionConfig{MissingEffects: reconcile.RedispatchMissing, Redispatches: attempts, MaxRedispatches: 2, RedispatchRetry: 5 * time.Millisecond},
+	})
+	cfg.Port = remote
+	p2 := newLocalHost(t, cfg, nil)
+	if _, err := p2.RegisterPreset("a1", ap); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := p2.OpenSession(ctx, sid, app.SessionOptions{Preset: presetRef})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for remote.callCount() < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("dispatch calls = %d, want repeated reconciliation", remote.callCount())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	key := remote.lastKey()
+	state, _, _, err := attempts.Load(ctx, key)
+	if err != nil || state.Planned != 1 || state.Dispatched != 0 || state.GivenUp {
+		t.Fatalf("redispatch state after unknown retries = %+v %v, want one pending attempt", state, err)
+	}
+	if err := s2.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	calls := remote.callCount()
+	time.Sleep(30 * time.Millisecond)
+	if got := remote.callCount(); got != calls {
+		t.Fatalf("dispatch calls after close = %d, want stopped at %d", got, calls)
+	}
+
 	close(gate.release)
 	if err := <-sendErr; err == nil {
 		t.Fatal("the superseded process's Send settled without an ownership error")

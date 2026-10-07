@@ -48,6 +48,10 @@ type Recovery struct {
 	// MaxRedispatches bounds redispatches per effect; zero selects the
 	// reconciler's default.
 	MaxRedispatches int
+	// RedispatchRetry is the interval between reconciliations after a
+	// redispatch ended at a retryable or unknown dispatch boundary. Zero
+	// selects DefaultRedispatchRetry.
+	RedispatchRetry time.Duration
 	// OrphanProbe is how often an effect still waiting is attached and, when
 	// orphaned, handed to RecoverExecution by the Reconciler of a takeover;
 	// zero selects its default.
@@ -68,7 +72,14 @@ type lifetime struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	w      writer.Writer
+
+	retryMu sync.Mutex
+	retries map[effect.AssignmentKey]struct{}
 }
+
+// DefaultRedispatchRetry bounds how long a live owner leaves an effect at a
+// temporary redispatch boundary before reconciling it again.
+const DefaultRedispatchRetry = time.Second
 
 func (r *Recovery) fail(sid session.SessionID, err error) {
 	if r.Fail != nil {
@@ -124,20 +135,93 @@ func (r *Recovery) Open(ctx context.Context, w writer.Writer) (int, error) {
 // durable record, not a duplicate dispatch, decides the settlement.
 func (r *Recovery) Recover(ctx context.Context, w writer.Writer) (int, error) {
 	lt := r.lifetimeOf(w)
-	sid := w.SessionID()
+	return r.Runs.RecoverInterrupted(ctx, w, r.reconciler(lt))
+}
+
+// reconciler builds one pass over lt. A transient redispatch asks the
+// lifetime's deduplicated interval worker to revisit only that effect.
+func (r *Recovery) reconciler(lt *lifetime) *reconcile.Reconciler {
+	sid := lt.w.SessionID()
 	rec := &reconcile.Reconciler{Executions: r.Executor, Lifetime: lt.ctx, Watcher: r.Watcher, Deliver: r.reattachDeliver(lt),
 		Fail: func(key effect.AssignmentKey, err error) {
-			r.fail(sid, fmt.Errorf("driver: outcome of run %s effect %s cannot be read; the target stays executing until the next takeover: %w", key.RunID, key.Effect, err))
+			r.fail(sid, fmt.Errorf("driver: outcome of run %s effect %s cannot be read; the target stays executing until reconciliation: %w", key.RunID, key.Effect, err))
 		}}
 	rec.Missing = r.MissingEffects
 	rec.OrphanProbe = r.OrphanProbe
 	if r.MissingEffects == reconcile.RedispatchMissing {
 		// Missing effects are handed to the Executor again within the
 		// budget; the dispatch ledger remembers the attempts.
-		rec.Attempts, rec.Epoch, rec.MaxRedispatches = r.Redispatches, w.Epoch(), r.MaxRedispatches
+		rec.Attempts, rec.Epoch, rec.MaxRedispatches = r.Redispatches, lt.w.Epoch(), r.MaxRedispatches
 		rec.Redispatch = func(ctx context.Context, key effect.AssignmentKey) error { return r.redispatch(ctx, lt.w, key) }
+		rec.Requeue = func(key effect.AssignmentKey) { r.requeue(lt, key) }
 	}
-	return r.Runs.RecoverInterrupted(ctx, w, rec)
+	return rec
+}
+
+// requeue starts at most one cancellable reconciliation worker for key in
+// this Session lifetime. Every pass reloads the durable Run snapshot; the
+// Reconciler reloads the durable redispatch ledger before deciding whether
+// the pending attempt is owed. It stops when the effect is gone, is disposed,
+// reaches an accepted execution, or the Session lifetime closes.
+func (r *Recovery) requeue(lt *lifetime, key effect.AssignmentKey) {
+	lt.retryMu.Lock()
+	if lt.ctx.Err() != nil {
+		lt.retryMu.Unlock()
+		return
+	}
+	if lt.retries == nil {
+		lt.retries = make(map[effect.AssignmentKey]struct{})
+	}
+	if _, exists := lt.retries[key]; exists {
+		lt.retryMu.Unlock()
+		return
+	}
+	lt.retries[key] = struct{}{}
+	lt.retryMu.Unlock()
+
+	go func() {
+		defer func() {
+			lt.retryMu.Lock()
+			delete(lt.retries, key)
+			lt.retryMu.Unlock()
+		}()
+		interval := r.RedispatchRetry
+		if interval <= 0 {
+			interval = DefaultRedispatchRetry
+		}
+		timer := time.NewTimer(interval)
+		defer timer.Stop()
+		for {
+			select {
+			case <-lt.ctx.Done():
+				return
+			case <-timer.C:
+			}
+			st := r.Runs.Bind(lt.w)
+			snapshot, err := st.Load(lt.ctx, key.RunID)
+			if err != nil {
+				if lt.ctx.Err() != nil {
+					return
+				}
+				r.fail(lt.w.SessionID(), fmt.Errorf("driver: reload run %s for redispatch reconciliation: %w", key.RunID, err))
+				timer.Reset(interval)
+				continue
+			}
+			decision, ok, err := r.reconciler(lt).ReconcileEffect(lt.ctx, st, &snapshot, key)
+			if err != nil {
+				if lt.ctx.Err() != nil {
+					return
+				}
+				r.fail(lt.w.SessionID(), fmt.Errorf("driver: reconcile redispatch of run %s effect %s: %w", key.RunID, key.Effect, err))
+				timer.Reset(interval)
+				continue
+			}
+			if !ok || !decision.Retry {
+				return
+			}
+			timer.Reset(interval)
+		}
+	}()
 }
 
 // redispatch is the reconciler's Redispatch port: the Assignment of an

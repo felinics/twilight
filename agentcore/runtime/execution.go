@@ -52,6 +52,13 @@ type ExecutionConfig struct {
 	// Redispatches is the dispatch ledger RedispatchMissing writes; durable
 	// like every store (OWN-PRT-3). Unused under DisposeMissing.
 	Redispatches redispatch.Store
+	// MaxRedispatches bounds redispatches per effect; zero selects the
+	// reconciler's default.
+	MaxRedispatches int
+	// RedispatchRetry is the interval between reconciliations after a
+	// retryable or unknown redispatch result; zero selects the recovery
+	// default.
+	RedispatchRetry time.Duration
 	// Planner, when set, is consulted between the steps of every Run with
 	// the Writer of the Session being driven: the application's in-turn
 	// context policy.
@@ -109,8 +116,20 @@ func NewExecution(cfg ExecutionConfig, src ExecutionSources) (*Execution, error)
 	if cfg.PromptBuilders == nil {
 		return nil, errors.New("runtime: a prompt builder catalog is required (ExecutionConfig.PromptBuilders); the runtime ships no default")
 	}
-	if cfg.MissingEffects == reconcile.RedispatchMissing && cfg.Redispatches == nil {
-		return nil, errors.New("runtime: MissingEffects=redispatch requires a dispatch ledger (ExecutionConfig.Redispatches, RUN-EXE-15)")
+	switch cfg.MissingEffects {
+	case reconcile.DisposeMissing:
+	case reconcile.RedispatchMissing:
+		if cfg.Redispatches == nil {
+			return nil, errors.New("runtime: MissingEffects=redispatch requires a dispatch ledger (ExecutionConfig.Redispatches, RUN-EXE-15)")
+		}
+	default:
+		return nil, errors.New("runtime: unknown MissingEffects policy")
+	}
+	if cfg.MaxRedispatches < 0 {
+		return nil, errors.New("runtime: MaxRedispatches must not be negative")
+	}
+	if cfg.RedispatchRetry < 0 {
+		return nil, errors.New("runtime: RedispatchRetry must not be negative")
 	}
 	presets := cfg.Presets
 	if presets == nil {
@@ -132,7 +151,8 @@ func NewExecution(cfg ExecutionConfig, src ExecutionSources) (*Execution, error)
 	loops := &driver.Loops{Executor: cfg.Executor, Presets: presets, PromptBuilders: cfg.PromptBuilders, Targets: cfg.TargetResolver,
 		Sources: prompt.Sources{Projections: src.Projections, Content: src.Content}, Watcher: x.Watcher, Planner: cfg.Planner}
 	x.Recovery = &driver.Recovery{Runs: src.Runs, Executor: cfg.Executor, Loops: loops, Watcher: x.Watcher, Fail: report,
-		MissingEffects: cfg.MissingEffects, Redispatches: cfg.Redispatches, OrphanProbe: cfg.OrphanProbe, Sink: progressSink{x.Progress}}
+		MissingEffects: cfg.MissingEffects, Redispatches: cfg.Redispatches, MaxRedispatches: cfg.MaxRedispatches,
+		RedispatchRetry: cfg.RedispatchRetry, OrphanProbe: cfg.OrphanProbe, Sink: progressSink{x.Progress}}
 	var responders *driver.Responders
 	if len(cfg.Responders) > 0 {
 		responders = &driver.Responders{Runs: src.Runs, Tools: cfg.Responders, Fail: report}

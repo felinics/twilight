@@ -59,6 +59,11 @@ type Decision struct {
 	Observed effect.AttachmentState
 	Verdict  Verdict
 	Recovery *plan.RecoveryDisposition
+	// Retry reports a transient redispatch refusal or unknown dispatch
+	// boundary. No outcome watch is installed while it is true: the owner
+	// must reconcile this effect again after an interval, first re-reading
+	// the durable Run and dispatch ledger.
+	Retry bool
 }
 
 // ErrNoExecutionPort reports a Plan over Executing targets with no executor
@@ -180,6 +185,11 @@ type Reconciler struct {
 	// MaxRedispatches bounds redispatches per effect; zero selects
 	// DefaultMaxRedispatches.
 	MaxRedispatches int
+	// Requeue is notified when a redispatch ended at a temporary boundary
+	// and the effect needs another reconciliation. It must not block Plan;
+	// the Recovery implementation deduplicates these requests per Session
+	// lifetime. Nil leaves retry scheduling to the caller.
+	Requeue func(effect.AssignmentKey)
 	// Now stamps the dispatch ledger; nil selects time.Now.
 	Now func() time.Time
 }
@@ -230,7 +240,23 @@ func verdictOf(state effect.AttachmentState) (Verdict, error) {
 // the effect (RUN-WIR-1), so any owner that plans the same state issues the
 // same command.
 func (r *Reconciler) Plan(ctx context.Context, scope run.Scope, snapshot *store.Snapshot) ([]Decision, error) {
+	return r.plan(ctx, scope, snapshot, nil)
+}
+
+// plan optionally limits reconciliation to one AssignmentKey. Recovery uses
+// this form for an interval retry so unrelated effects do not acquire another
+// watcher or get dispatched again.
+func (r *Reconciler) plan(ctx context.Context, scope run.Scope, snapshot *store.Snapshot, only *effect.AssignmentKey) ([]Decision, error) {
 	targets := plan.RecoveryTargets(&snapshot.State)
+	if only != nil {
+		filtered := targets[:0]
+		for _, target := range targets {
+			if (effect.AssignmentKey{Session: scope, RunID: target.RunID, Effect: target.Effect}) == *only {
+				filtered = append(filtered, target)
+			}
+		}
+		targets = filtered
+	}
 	if len(targets) == 0 {
 		return nil, nil
 	}
@@ -272,7 +298,7 @@ func (r *Reconciler) Plan(ctx context.Context, scope run.Scope, snapshot *store.
 				r.recoverOrphan(ctx, assignment.Key())
 			}
 			if d.Verdict == Dispose && attachment.State == effect.AttachmentMissing {
-				if d.Verdict, err = r.missing(ctx, assignment.Key()); err != nil {
+				if d.Verdict, d.Retry, err = r.missing(ctx, assignment.Key()); err != nil {
 					return nil, err
 				}
 			}
@@ -293,7 +319,11 @@ func (r *Reconciler) Plan(ctx context.Context, scope run.Scope, snapshot *store.
 					r.recoverOrphan(ctx, assignment.Key())
 				}
 			}
-			if d.Verdict != Dispose {
+			if d.Retry {
+				if r.Requeue != nil {
+					r.Requeue(assignment.Key())
+				}
+			} else if d.Verdict != Dispose {
 				r.awaitOutcome(assignment.Key())
 			}
 		}
@@ -318,16 +348,16 @@ func (r *Reconciler) Plan(ctx context.Context, scope run.Scope, snapshot *store.
 // (ErrDispatchRetryable) or a lost response (ErrDispatchUnknown) leaves the
 // attempt owed and the target Executing for the next reconciliation; any
 // other rejection ends the attempts.
-func (r *Reconciler) missing(ctx context.Context, key effect.AssignmentKey) (Verdict, error) {
+func (r *Reconciler) missing(ctx context.Context, key effect.AssignmentKey) (Verdict, bool, error) {
 	if r.Missing == DisposeMissing {
-		return Dispose, nil
+		return Dispose, false, nil
 	}
 	state, _, _, err := r.Attempts.Load(ctx, key)
 	if err != nil {
-		return Dispose, err
+		return Dispose, false, err
 	}
 	if state.GivenUp {
-		return Dispose, nil
+		return Dispose, false, nil
 	}
 	budget := r.MaxRedispatches
 	if budget <= 0 {
@@ -335,28 +365,28 @@ func (r *Reconciler) missing(ctx context.Context, key effect.AssignmentKey) (Ver
 	}
 	if state.Pending() == 0 && state.Planned >= budget {
 		if err := redispatch.GiveUp(ctx, r.Attempts, r.Epoch, key, fmt.Sprintf("redispatch budget of %d exhausted", budget), r.now()); err != nil {
-			return Dispose, err
+			return Dispose, false, err
 		}
-		return Dispose, nil
+		return Dispose, false, nil
 	}
 	attempt, err := redispatch.Plan(ctx, r.Attempts, r.Epoch, key, r.now())
 	if err != nil {
-		return Dispose, err
+		return Dispose, false, err
 	}
 	err = r.Redispatch(ctx, key)
 	switch {
 	case err == nil:
 		if err := redispatch.MarkDispatched(ctx, r.Attempts, r.Epoch, key, attempt, r.now()); err != nil {
-			return Dispose, err
+			return Dispose, false, err
 		}
-		return Redispatch, nil
+		return Redispatch, false, nil
 	case errors.Is(err, effect.ErrDispatchRetryable), errors.Is(err, effect.ErrDispatchUnknown):
-		return Defer, nil
+		return Defer, true, nil
 	default:
 		if gerr := redispatch.GiveUp(ctx, r.Attempts, r.Epoch, key, err.Error(), r.now()); gerr != nil {
-			return Dispose, gerr
+			return Dispose, false, gerr
 		}
-		return Dispose, nil
+		return Dispose, false, nil
 	}
 }
 
@@ -516,4 +546,28 @@ func (r *Reconciler) Reconcile(ctx context.Context, st store.RunStore, snapshot 
 		return 0, err
 	}
 	return Apply(ctx, st, decisions)
+}
+
+// ReconcileEffect re-reads and reconciles only key's target from snapshot.
+// It is the interval-retry counterpart of Session-level Reconcile: limiting
+// the pass to one effect prevents retries from replacing unrelated watches
+// or redispatching unrelated targets. ok is false once the durable Run no
+// longer has that effect executing.
+func (r *Reconciler) ReconcileEffect(ctx context.Context, st store.RunStore, snapshot *store.Snapshot, key effect.AssignmentKey) (decision Decision, ok bool, err error) {
+	if r.Lifetime != nil {
+		if err := r.Lifetime.Err(); err != nil {
+			return Decision{}, false, err
+		}
+	}
+	decisions, err := r.plan(ctx, st.Scope(), snapshot, &key)
+	if err != nil {
+		return Decision{}, false, err
+	}
+	if len(decisions) == 0 {
+		return Decision{}, false, nil
+	}
+	if _, err := Apply(ctx, st, decisions); err != nil {
+		return Decision{}, false, err
+	}
+	return decisions[0], true, nil
 }
