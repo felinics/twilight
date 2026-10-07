@@ -15,6 +15,7 @@ import (
 	"github.com/felinics/twilight/agentcore/run/effect"
 	"github.com/felinics/twilight/agentcore/run/loop"
 	"github.com/felinics/twilight/agentcore/run/reconcile"
+	"github.com/felinics/twilight/agentcore/run/redispatch"
 	"github.com/felinics/twilight/agentcore/run/redispatch/redispatchtest"
 	"github.com/felinics/twilight/agentcore/run/sessionstore"
 	rt "github.com/felinics/twilight/agentcore/runtime"
@@ -292,16 +293,22 @@ func TestRestartRedispatchRetryReconcilesWithoutTakeover(t *testing.T) {
 		t.Fatalf("recovered = %d, want no disposal", s2.Recovered)
 	}
 	deadline := time.Now().Add(5 * time.Second)
-	for remote.callCount() < 4 {
+	var state redispatch.State
+	for {
+		key := remote.lastKey()
+		if key != (effect.AssignmentKey{}) {
+			state, _, _, err = attempts.Load(ctx, key)
+			if err == nil && state.Planned == 1 && state.Dispatched == 1 {
+				break
+			}
+		}
 		if time.Now().After(deadline) {
-			t.Fatalf("dispatch calls = %d, want retry after the first reconciliation", remote.callCount())
+			t.Fatalf("dispatch calls = %d, redispatch state = %+v %v; want one accepted durable attempt", remote.callCount(), state, err)
 		}
 		time.Sleep(time.Millisecond)
 	}
-	key := remote.lastKey()
-	state, _, _, err := attempts.Load(ctx, key)
-	if err != nil || state.Planned != 1 || state.Dispatched != 1 {
-		t.Fatalf("redispatch state = %+v %v, want one accepted durable attempt", state, err)
+	if remote.callCount() < 4 {
+		t.Fatalf("dispatch calls = %d, want retry after the first reconciliation", remote.callCount())
 	}
 	deadline = time.Now().Add(5 * time.Second)
 	for {

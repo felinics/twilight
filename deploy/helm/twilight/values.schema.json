@@ -11,6 +11,29 @@
         }
       }
     },
+    "recovery": {
+      "type": "object",
+      "required": ["missingEffects", "maxRedispatches", "redispatchRetry", "orphanProbe"],
+      "properties": {
+        "missingEffects": {
+          "type": "string",
+          "enum": ["dispose", "redispatch"],
+          "description": "How takeover handles an executing effect missing from the executor. Redispatch may repeat external side effects."
+        },
+        "maxRedispatches": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "redispatchRetry": {
+          "type": "string",
+          "minLength": 1
+        },
+        "orphanProbe": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "services": {
       "type": "object",
       "properties": {

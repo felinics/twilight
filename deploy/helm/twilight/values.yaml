@@ -23,6 +23,15 @@ postgres:
   username: twilight
   passwordKey: postgres-password
 
+recovery:
+  # Redispatch can repeat an external side effect after its backend loses
+  # process-local state. Keep the safe compatibility policy unless every
+  # configured effect is idempotent or otherwise safe to retry.
+  missingEffects: dispose
+  maxRedispatches: 3
+  redispatchRetry: 1s
+  orphanProbe: 15s
+
 # Every workload role gets its own k3d agent node. The matching taint is
 # applied when the cluster is created, so unrelated pods stay away too.
 placement:
