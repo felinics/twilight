@@ -13,6 +13,8 @@ agentSandbox:
   warmPool: twilight-sandbox-pool
   image: us-central1-docker.pkg.dev/k8s-staging-images/agent-sandbox/sandboxd:latest-main
   replicas: 1
+  # Agent Sandbox does not provide snapshot/restore, so keep turn snapshots off.
+  snapshotAfterTurn: false
 
 postgres:
   image: postgres:18-alpine

@@ -6,7 +6,7 @@ metadata:
     {{- include "twilight.labels" (dict "name" "config" "Release" .Release) | nindent 4 }}
 data:
   owner.json: |
-{{ .Files.Get "config/owner.json" | indent 4 }}
+{{ tpl (.Files.Get "config/owner.json") . | indent 4 }}
   worker.json: |
 {{ .Files.Get "config/worker.json" | indent 4 }}
   model-backend.json: |

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/felinics/twilight/agent/environment"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	sandboxclient "sigs.k8s.io/agent-sandbox/clients/go/sandbox"
 )
 
@@ -27,9 +28,14 @@ type Config struct {
 	WarmPool  string
 }
 
+type sandboxAPI interface {
+	CreateSandbox(context.Context, string, string) (*sandboxclient.Sandbox, error)
+	GetSandbox(context.Context, string, string) (*sandboxclient.Sandbox, error)
+}
+
 // Provider creates and attaches Agent Sandbox claims.
 type Provider struct {
-	client    *sandboxclient.Client
+	client    sandboxAPI
 	namespace string
 	warmPool  string
 }
@@ -78,6 +84,9 @@ func (p *Provider) Attach(ctx context.Context, raw environment.EnvironmentRef) (
 	}
 	sb, err := p.client.GetSandbox(ctx, claim, namespace)
 	if err != nil {
+		if k8serrors.IsNotFound(err) || errors.Is(err, sandboxclient.ErrSandboxDeleted) {
+			return nil, fmt.Errorf("agentsandbox: attach %s: %w: %w", raw, environment.ErrNotFound, err)
+		}
 		return nil, fmt.Errorf("agentsandbox: attach %s: %w", raw, err)
 	}
 	return &Environment{sandbox: sb, ref: raw}, nil

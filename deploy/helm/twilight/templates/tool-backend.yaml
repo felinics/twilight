@@ -19,6 +19,8 @@ metadata:
   labels:
     {{- include "twilight.labels" (dict "name" "tool-backend" "Release" .Release) | nindent 4 }}
 spec:
+  strategy:
+    type: Recreate
   replicas: {{ .Values.services.toolBackend.replicas }}
   selector:
     matchLabels:

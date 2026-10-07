@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "agentSandbox": {
+      "type": "object",
+      "properties": {
+        "snapshotAfterTurn": {
+          "type": "boolean",
+          "description": "Whether the owner snapshots the workspace after each turn. Keep false for Agent Sandbox, which does not support snapshots."
+        }
+      }
+    },
+    "services": {
+      "type": "object",
+      "properties": {
+        "modelBackend": {
+          "type": "object",
+          "properties": {
+            "replicas": {
+              "type": "integer",
+              "enum": [1],
+              "description": "model-backend uses process-local state and must run exactly one replica."
+            }
+          }
+        },
+        "toolBackend": {
+          "type": "object",
+          "properties": {
+            "replicas": {
+              "type": "integer",
+              "enum": [1],
+              "description": "tool-backend owns process-local environment handles and must run exactly one replica."
+            }
+          }
+        }
+      }
+    }
+  }
+}

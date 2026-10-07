@@ -7,7 +7,7 @@
   "lease": "1m",
   "inboxPoll": "1s",
   "activation": {"preset": "default", "idleRelease": "30s", "scan": "5s"},
-  "snapshotAfterTurn": true,
+  "snapshotAfterTurn": {{ .Values.agentSandbox.snapshotAfterTurn }},
   "presets": [
     {"id": "default", "model": "chat", "systemPrompt": "You are a coding assistant working in the bound workspace.", "workspaceTools": true}
   ]
