@@ -2,15 +2,15 @@ package observe_test
 
 import (
 	"context"
-	"errors"
+	"testing"
+	"time"
+
 	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/module"
 	"github.com/felinics/twilight/agentcore/observe"
 	"github.com/felinics/twilight/agentcore/session"
 	"github.com/felinics/twilight/agentcore/session/filestore/filestoretest"
 	"github.com/felinics/twilight/agentcore/session/writer"
-	"testing"
-	"time"
 )
 
 type rowPayload struct {
@@ -73,12 +73,14 @@ func TestSubscribeFromCatchesUpThenGoesLive(t *testing.T) {
 	defer cancel()
 	store := filestoretest.Store(t)
 	reg := registry(t)
-	bus := observe.NewBus(reg, store)
+	bus := observe.NewBus(reg)
+	tailer := observe.NewSessionLedgerTailer(reg, store)
+	defer tailer.Close()
 	const sid session.SessionID = "s1"
 	if _, err := store.Create(ctx, session.CreateRequest{SessionID: sid}); err != nil {
 		t.Fatal(err)
 	}
-	w, err := writer.NewWriters(store, reg, writer.Admission{}, session.OpenOptions{}, writer.WritersConfig{Observers: []writer.CommitObserver{bus}}).Writer(ctx, sid)
+	w, err := writer.NewWriters(store, reg, writer.Admission{}, session.OpenOptions{}, writer.WritersConfig{Observers: []writer.CommitObserver{bus, tailer}}).Writer(ctx, sid)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +106,7 @@ func TestSubscribeFromCatchesUpThenGoesLive(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sctx, scancel := context.WithCancel(ctx)
 			defer scancel()
-			ch, err := bus.SubscribeFrom(sctx, sid, tc.from)
+			ch, err := tailer.SubscribeFrom(sctx, sid, tc.from)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -139,9 +141,6 @@ func TestSubscribeFromCatchesUpThenGoesLive(t *testing.T) {
 	if got[0] != "g" {
 		t.Fatalf("live = %v, want [g]", got)
 	}
-	if _, err := observe.NewBus(reg, nil).SubscribeFrom(ctx, sid, 0); !errors.Is(err, observe.ErrNoHistory) {
-		t.Fatalf("SubscribeFrom without history = %v, want ErrNoHistory", err)
-	}
 }
 
 // A durable subscriber tails the shared History, not only the Committed
@@ -152,8 +151,9 @@ func TestSubscribeFromTailsCommitsFromAnotherBus(t *testing.T) {
 	defer cancel()
 	store := filestoretest.Store(t)
 	reg := registry(t)
-	readerBus := observe.NewBus(reg, store)
-	writerBus := observe.NewBus(reg, store)
+	readerTailer := observe.NewSessionLedgerTailer(reg, store)
+	defer readerTailer.Close()
+	writerBus := observe.NewBus(reg)
 	const sid session.SessionID = "cross-owner"
 	if _, err := store.Create(ctx, session.CreateRequest{SessionID: sid}); err != nil {
 		t.Fatal(err)
@@ -164,7 +164,7 @@ func TestSubscribeFromTailsCommitsFromAnotherBus(t *testing.T) {
 	}
 	defer w.Close(ctx)
 
-	events, err := readerBus.SubscribeFrom(ctx, sid, 0)
+	events, err := readerTailer.SubscribeFrom(ctx, sid, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestSubscribeFromTailsCommitsFromAnotherBus(t *testing.T) {
 // queue, and publishing remains synchronous and quick.
 func TestSlowSubscribersAreClosedWithoutBlockingPublishers(t *testing.T) {
 	reg := registry(t)
-	bus := observe.NewBus(reg, nil)
+	bus := observe.NewBus(reg)
 	progress := observe.NewProgresses()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

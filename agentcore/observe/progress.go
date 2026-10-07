@@ -15,12 +15,12 @@ import (
 // the committed result that follows.
 type Progresses struct {
 	mu   sync.Mutex
-	subs map[session.SessionID]map[*subscriber]struct{}
+	subs map[session.SessionID]map[*localSubscriber]struct{}
 }
 
 // NewProgresses returns an empty transient stream.
 func NewProgresses() *Progresses {
-	return &Progresses{subs: make(map[session.SessionID]map[*subscriber]struct{})}
+	return &Progresses{subs: make(map[session.SessionID]map[*localSubscriber]struct{})}
 }
 
 // Publish delivers one transient progress observation to the Session's
@@ -37,7 +37,7 @@ func (p *Progresses) Failed(sid session.SessionID, err error) {
 
 func (p *Progresses) publish(sid session.SessionID, events ...Event) {
 	p.mu.Lock()
-	subs := make([]*subscriber, 0, len(p.subs[sid]))
+	subs := make([]*localSubscriber, 0, len(p.subs[sid]))
 	for s := range p.subs[sid] {
 		subs = append(subs, s)
 	}
@@ -54,17 +54,17 @@ func (p *Progresses) publish(sid session.SessionID, events ...Event) {
 // does not keep up is detached and closed at the same hard bound as a live
 // committed subscription.
 func (p *Progresses) Subscribe(ctx context.Context, sid session.SessionID) <-chan Event {
-	s := &subscriber{out: make(chan Event, subscriberBuffer), done: make(chan struct{})}
+	s := newLocalSubscriber()
 	p.mu.Lock()
 	if p.subs[sid] == nil {
-		p.subs[sid] = make(map[*subscriber]struct{})
+		p.subs[sid] = make(map[*localSubscriber]struct{})
 	}
 	p.subs[sid][s] = struct{}{}
 	p.mu.Unlock()
 	go func() {
 		select {
 		case <-ctx.Done():
-			s.closeLive()
+			s.close()
 		case <-s.done:
 		}
 		p.detach(sid, s)
@@ -72,7 +72,7 @@ func (p *Progresses) Subscribe(ctx context.Context, sid session.SessionID) <-cha
 	return s.out
 }
 
-func (p *Progresses) detach(sid session.SessionID, s *subscriber) {
+func (p *Progresses) detach(sid session.SessionID, s *localSubscriber) {
 	p.mu.Lock()
 	delete(p.subs[sid], s)
 	if len(p.subs[sid]) == 0 {

@@ -89,10 +89,11 @@ type Kernel struct {
 	Runs *sessionstore.SessionRunStore
 	// Turns commits the Turn protocol and reads Turn status.
 	Turns *Coordinator
-	// Bus is the committed event stream: a CommitObserver on the Writers
-	// (OBS-1), carrying the applied groups decoded, in commit order. It
-	// carries facts only; transient observations are not part of it.
+	// Bus is the process-local committed fan-out. Tailer is the durable
+	// committed stream backed by Store; both observe local Writers, but the
+	// Tailer uses callbacks only to wake its shared per-Session poll loop.
 	Bus    *observe.Bus
+	Tailer *observe.SessionLedgerTailer
 	Frozen frozen.Store
 	// Projections reads every projection through the Session's Writer.
 	Projections session.ProjectionReader
@@ -126,8 +127,9 @@ func New(p Ports) (*Kernel, error) { //nolint:gocritic // hugeParam: Ports is a 
 	}
 	// The event stream observes every group the Writers apply (EXT-WRT-7)
 	// and decodes through the Registry, so both exist before the Writers do.
-	bus := observe.NewBus(registry, store)
-	observers := append([]writer.CommitObserver{bus}, p.Observers...)
+	bus := observe.NewBus(registry)
+	tailer := observe.NewSessionLedgerTailer(registry, store)
+	observers := append([]writer.CommitObserver{bus, tailer}, p.Observers...)
 	bindings, retention := p.Artifacts.Bindings, p.Artifacts.Ledger
 	// A projection cache lets a reopened Session start folding instead of
 	// refolding the whole log (EXT-PRJ-3). An adapter that can store entries
@@ -165,7 +167,7 @@ func New(p Ports) (*Kernel, error) { //nolint:gocritic // hugeParam: Ports is a 
 	return &Kernel{
 		Store: store, Writers: writers, Registry: registry, Admission: admission, Runs: runs,
 		Turns: &Coordinator{Projections: projections, Runs: runs, Now: now},
-		Bus:   bus, Frozen: fz, Projections: projections, Content: content,
+		Bus:   bus, Tailer: tailer, Frozen: fz, Projections: projections, Content: content,
 		Chatlog: &chatlog.Commands{Now: now},
 		History: history.History{Store: store, Registry: registry, Projections: projections},
 		Clock:   now,
@@ -180,10 +182,12 @@ func NewRegistry(extensions []module.ModuleDescriptor) (*module.Registry, error)
 		[]module.ModuleDescriptor{chatlog.Module, sessionstore.Module, turn.Module}, extensions)
 }
 
-// Close ends the Writers: the lease-free readers of other processes keep
-// working; the execution side of a host closes before this.
+// Close ends the Writers and every durable tail loop. The lease-free readers
+// of other processes keep working; the execution side of a host closes first.
 func (a *Kernel) Close(ctx context.Context) error {
-	return writer.CloseWriters(ctx, a.Writers)
+	err := writer.CloseWriters(ctx, a.Writers)
+	a.Tailer.Close()
+	return err
 }
 
 // CreateSession creates the Session; ext are the segment's module extension

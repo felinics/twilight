@@ -1,21 +1,13 @@
 // Package observe carries a Session's observations (OBS-1) in two streams.
-// The Bus is the committed stream: a writer.CommitObserver that decodes
-// every applied commit through the Registry and fans it out, in commit
-// order, to the subscribers of each Session. Its subscription is a catch-up
-// subscription: it may start from a CommitSeq, reading the ledger up to its
-// head and continuing live, so a consumer that keeps its own checkpoint
-// resumes after a crash without a gap. The Progresses are the transient
-// stream: what the executor reported of an effect while it ran, and the
-// failures of background work -- none of it a fact, all of it expendable. A
-// host that serves one audience from both merges the two.
+// Bus and Progresses are process-local fan-outs for committed and transient
+// observations. SessionLedgerTailer is the durable stream: it follows the
+// shared ledger and uses CommitObserver notifications only as polling hints.
 package observe
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"sync"
-	"time"
 
 	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/module"
@@ -24,19 +16,15 @@ import (
 )
 
 // Event is one item of a Session's observation stream, in either of two
-// shapes. A committed Event carries one event decoded from the applied
-// commits through the Registry: Module, Version and Value are the decoded
-// payload, Unknown reports a type or version this process has no codec for
-// (the event is still delivered) and Err reports the decode or history-read
-// failure. A transient Event has a zero Row: Progress carries what the
-// executor reported of an effect while it ran, or Err alone carries a
-// failure of background work; neither is a fact, either may be lost, and
-// the committed result that follows replaces it.
+// shapes. A committed Event carries one event decoded from an applied commit:
+// Module, Version and Value are its decoded payload, while Unknown reports a
+// type or version this process has no codec for. A transient Event has a zero
+// Row and carries Progress or Err.
 type Event struct {
 	Session session.SessionID
 	// Position is the event's place in the Session's ledger: the commit's
-	// Seq and the event's index within the commit. It is what a consumer
-	// checkpoints; zero on a transient Event.
+	// sequence and the event's index in that commit. It is zero for transient
+	// observations.
 	Position ledger.Position
 	Row      ledger.Event
 	Module   module.ModuleKey
@@ -44,11 +32,8 @@ type Event struct {
 	Value    any
 	Unknown  bool
 	Err      error
-	// Progress is set for a transient observation of an effect in flight
-	// (RUN-EXE-12, OBS-1): a model or tool delta relayed from the executor,
-	// or a reset that voids the deltas received so far. Such an Event has a
-	// zero Row: it is not a fact, may be lost, and is replaced by the
-	// committed result that follows.
+	// Progress is expendable executor output. The durable committed result
+	// which follows replaces it.
 	Progress *Progress
 }
 
@@ -63,55 +48,35 @@ type Progress struct {
 	Payload    json.RawMessage
 }
 
-// History reads a Session's committed history: the Store, or anything that
-// serves its ReadCommits. It is the source of truth for a catch-up
-// subscription, including commits written through another Bus or owner.
-type History interface {
-	ReadCommits(context.Context, session.CommitReadRequest) (session.CommitPage, error)
-}
+const subscriberBuffer = 64
 
-// ErrNoHistory reports SubscribeFrom on a Bus built without a History.
-var ErrNoHistory = errors.New("observe: the bus has no history to catch up from")
-
-const (
-	subscriberBuffer   = 64
-	historyPageCommits = 64
-	historyPoll        = 100 * time.Millisecond
-)
-
-// Bus decodes applied commits and fans them out per Session. It carries
-// committed facts only; the transient observations of the running effects
-// are the Progresses' stream.
+// Bus is the process-local committed fan-out. It neither reads nor retains a
+// ledger: Committed decodes the supplied commit and immediately publishes it
+// to the subscribers that are present in this process.
 type Bus struct {
 	registry *module.Registry
-	history  History
 	mu       sync.Mutex
-	subs     map[session.SessionID]map[*subscriber]struct{}
+	subs     map[session.SessionID]map[*localSubscriber]struct{}
 }
 
-// NewBus returns a Bus decoding through registry. history, when not nil,
-// lets SubscribeFrom catch up from and continuously tail the ledger; a Bus
-// without it serves live subscriptions only.
-func NewBus(registry *module.Registry, history History) *Bus {
-	return &Bus{registry: registry, history: history, subs: make(map[session.SessionID]map[*subscriber]struct{})}
+// NewBus returns an empty process-local committed fan-out.
+func NewBus(registry *module.Registry) *Bus {
+	return &Bus{registry: registry, subs: make(map[session.SessionID]map[*localSubscriber]struct{})}
 }
 
-// Committed is writer.CommitObserver: one Event per committed event, in
-// commit order. For durable subscriptions it is only a low-latency wake-up;
-// those subscriptions always obtain the event itself from History.
+// Committed implements writer.CommitObserver.
 func (b *Bus) Committed(_ context.Context, sid session.SessionID, commit ledger.Commit) {
-	b.publish(sid, b.decode(sid, &commit)...)
+	b.publish(sid, decodeCommit(b.registry, sid, &commit))
 }
 
-// decode renders one commit as its Events, each at its Position.
-func (b *Bus) decode(sid session.SessionID, commit *ledger.Commit) []Event {
-	var events []Event
+func decodeCommit(registry *module.Registry, sid session.SessionID, commit *ledger.Commit) []Event {
+	events := make([]Event, 0)
 	index := uint32(0)
 	for _, batch := range commit.Batches {
 		for _, row := range batch.Events {
 			e := Event{Session: sid, Position: ledger.Position{Commit: commit.Seq, Index: index}, Row: row}
 			index++
-			decoded, err := b.registry.Decode(row)
+			decoded, err := registry.Decode(row)
 			if err != nil {
 				e.Unknown, e.Err = true, err
 			} else {
@@ -123,9 +88,9 @@ func (b *Bus) decode(sid session.SessionID, commit *ledger.Commit) []Event {
 	return events
 }
 
-func (b *Bus) publish(sid session.SessionID, events ...Event) {
+func (b *Bus) publish(sid session.SessionID, events []Event) {
 	b.mu.Lock()
-	subs := make([]*subscriber, 0, len(b.subs[sid]))
+	subs := make([]*localSubscriber, 0, len(b.subs[sid]))
 	for s := range b.subs[sid] {
 		subs = append(subs, s)
 	}
@@ -137,16 +102,20 @@ func (b *Bus) publish(sid session.SessionID, events ...Event) {
 	}
 }
 
-// Subscribe registers a subscriber to one Session's stream from this moment
-// on; the channel closes when ctx is done. Delivery has a hard bound: a
-// subscriber which does not keep up is detached and its channel is closed,
-// rather than retaining an unbounded queue or blocking a committer.
+// Subscribe registers a live-only subscriber. A subscriber that does not
+// keep up is detached and closed rather than blocking a committer.
 func (b *Bus) Subscribe(ctx context.Context, sid session.SessionID) <-chan Event {
-	s := b.attach(sid, false)
+	s := newLocalSubscriber()
+	b.mu.Lock()
+	if b.subs[sid] == nil {
+		b.subs[sid] = make(map[*localSubscriber]struct{})
+	}
+	b.subs[sid][s] = struct{}{}
+	b.mu.Unlock()
 	go func() {
 		select {
 		case <-ctx.Done():
-			s.closeLive()
+			s.close()
 		case <-s.done:
 		}
 		b.detach(sid, s)
@@ -154,100 +123,7 @@ func (b *Bus) Subscribe(ctx context.Context, sid session.SessionID) <-chan Event
 	return s.out
 }
 
-// SubscribeFrom reads every committed event of the Session from CommitSeq
-// from, in order, and then continuously tails History. History remains the
-// source of truth after catch-up, so writes made through another Bus or
-// owner are discovered by bounded polling. Local Committed calls only wake
-// the tailer early. Reads are paged and the channel closes when ctx is done;
-// a read failure closes it after an Event with Err.
-func (b *Bus) SubscribeFrom(ctx context.Context, sid session.SessionID, from ledger.CommitSeq) (<-chan Event, error) {
-	if b.history == nil {
-		return nil, ErrNoHistory
-	}
-	s := b.attach(sid, true)
-	page, err := b.readPage(ctx, sid, from)
-	if err != nil {
-		b.detach(sid, s)
-		return nil, err
-	}
-	go b.tail(ctx, sid, from, page, s)
-	return s.out, nil
-}
-
-func (b *Bus) readPage(ctx context.Context, sid session.SessionID, from ledger.CommitSeq) (session.CommitPage, error) {
-	return b.history.ReadCommits(ctx, session.CommitReadRequest{SessionID: sid, From: from, Limit: historyPageCommits})
-}
-
-func (b *Bus) tail(ctx context.Context, sid session.SessionID, from ledger.CommitSeq, page session.CommitPage, s *subscriber) {
-	defer func() {
-		b.detach(sid, s)
-		close(s.out)
-	}()
-	cursor := from
-	for {
-		for i := range page.Commits {
-			commit := &page.Commits[i]
-			for _, event := range b.decode(sid, commit) {
-				select {
-				case s.out <- event:
-				case <-ctx.Done():
-					return
-				}
-			}
-			cursor = commit.Seq + 1
-		}
-		if !page.HasMore {
-			timer := time.NewTimer(historyPoll)
-			select {
-			case <-s.wake:
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
-			case <-timer.C:
-			case <-ctx.Done():
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
-				return
-			}
-		}
-		var err error
-		page, err = b.readPage(ctx, sid, cursor)
-		if err != nil {
-			if ctx.Err() == nil {
-				select {
-				case s.out <- Event{Session: sid, Err: err}:
-				case <-ctx.Done():
-				}
-			}
-			return
-		}
-	}
-}
-
-func (b *Bus) attach(sid session.SessionID, durable bool) *subscriber {
-	s := &subscriber{out: make(chan Event, subscriberBuffer), durable: durable}
-	if durable {
-		s.wake = make(chan struct{}, 1)
-	} else {
-		s.done = make(chan struct{})
-	}
-	b.mu.Lock()
-	if b.subs[sid] == nil {
-		b.subs[sid] = make(map[*subscriber]struct{})
-	}
-	b.subs[sid][s] = struct{}{}
-	b.mu.Unlock()
-	return s
-}
-
-func (b *Bus) detach(sid session.SessionID, s *subscriber) {
+func (b *Bus) detach(sid session.SessionID, s *localSubscriber) {
 	b.mu.Lock()
 	delete(b.subs[sid], s)
 	if len(b.subs[sid]) == 0 {
@@ -256,28 +132,20 @@ func (b *Bus) detach(sid session.SessionID, s *subscriber) {
 	b.mu.Unlock()
 }
 
-// subscriber is either a bounded live delivery channel or a durable
-// tailer's wake-up. Durable subscribers never accept event data from the
-// publisher; the tailer reads it from History.
-type subscriber struct {
-	mu      sync.Mutex
-	out     chan Event
-	wake    chan struct{}
-	done    chan struct{}
-	durable bool
-	closed  bool
+// localSubscriber owns closure of its bounded output. push and close may race,
+// so both are serialized by mu.
+type localSubscriber struct {
+	mu     sync.Mutex
+	out    chan Event
+	done   chan struct{}
+	closed bool
 }
 
-// push never blocks. A full live subscriber is explicitly ended; a durable
-// subscriber merely receives a coalesced hint to poll History immediately.
-func (s *subscriber) push(events []Event) bool {
-	if s.durable {
-		select {
-		case s.wake <- struct{}{}:
-		default:
-		}
-		return true
-	}
+func newLocalSubscriber() *localSubscriber {
+	return &localSubscriber{out: make(chan Event, subscriberBuffer), done: make(chan struct{})}
+}
+
+func (s *localSubscriber) push(events []Event) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -287,18 +155,20 @@ func (s *subscriber) push(events []Event) bool {
 		select {
 		case s.out <- events[i]:
 		default:
-			close(s.out)
-			close(s.done)
-			s.closed = true
+			s.closeLocked()
 			return false
 		}
 	}
 	return true
 }
 
-func (s *subscriber) closeLive() {
+func (s *localSubscriber) close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.closeLocked()
+}
+
+func (s *localSubscriber) closeLocked() {
 	if !s.closed {
 		close(s.out)
 		close(s.done)

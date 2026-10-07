@@ -353,7 +353,7 @@ func (app *Application) Events(ctx context.Context, sid session.SessionID) <-cha
 // here after a disconnect without a gap.
 func (app *Application) EventsFrom(ctx context.Context, sid session.SessionID, from ledger.CommitSeq) (<-chan Event, error) {
 	streamCtx, cancel := context.WithCancel(ctx)
-	committed, err := app.Kernel.Bus.SubscribeFrom(streamCtx, sid, from)
+	committed, err := app.Kernel.Tailer.SubscribeFrom(streamCtx, sid, from)
 	if err != nil {
 		cancel()
 		return nil, err
