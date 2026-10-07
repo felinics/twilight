@@ -343,7 +343,8 @@ func (app *Application) PresetRef(id preset.PresetID) (preset.PresetRef, error) 
 // transient progress and failures. Committed events keep their commit
 // order; transient items may interleave and may be lost.
 func (app *Application) Events(ctx context.Context, sid session.SessionID) <-chan Event {
-	return mergeEvents(ctx, app.Kernel.Bus.Subscribe(ctx, sid), app.Execution.Progress.Subscribe(ctx, sid))
+	streamCtx, cancel := context.WithCancel(ctx)
+	return mergeEvents(streamCtx, app.Kernel.Bus.Subscribe(streamCtx, sid), app.Execution.Progress.Subscribe(streamCtx, sid), cancel)
 }
 
 // EventsFrom is the catch-up form of Events: the Session's committed events
@@ -351,25 +352,30 @@ func (app *Application) Events(ctx context.Context, sid session.SessionID) <-cha
 // from now on. A client that keeps the last Position it handled resumes
 // here after a disconnect without a gap.
 func (app *Application) EventsFrom(ctx context.Context, sid session.SessionID, from ledger.CommitSeq) (<-chan Event, error) {
-	committed, err := app.Kernel.Bus.SubscribeFrom(ctx, sid, from)
+	streamCtx, cancel := context.WithCancel(ctx)
+	committed, err := app.Kernel.Bus.SubscribeFrom(streamCtx, sid, from)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
-	return mergeEvents(ctx, committed, app.Execution.Progress.Subscribe(ctx, sid)), nil
+	return mergeEvents(streamCtx, committed, app.Execution.Progress.Subscribe(streamCtx, sid), cancel), nil
 }
 
 // mergeEvents forwards both observation streams into one channel until ctx
-// ends; each source closes independently and drops out of the merge.
-func mergeEvents(ctx context.Context, committed, transient <-chan Event) <-chan Event {
+// ends. The committed stream is authoritative: when it closes after a
+// history read failure or subscriber overflow, the merged stream closes too
+// so an HTTP client can reconnect from its durable Position. The transient
+// stream may close independently because its progress is explicitly lossy.
+func mergeEvents(ctx context.Context, committed, transient <-chan Event, cancel context.CancelFunc) <-chan Event {
 	out := make(chan Event, 64)
 	go func() {
 		defer close(out)
-		for committed != nil || transient != nil {
+		defer cancel()
+		for committed != nil {
 			select {
 			case e, ok := <-committed:
 				if !ok {
-					committed = nil
-					continue
+					return
 				}
 				select {
 				case out <- e:
@@ -386,6 +392,8 @@ func mergeEvents(ctx context.Context, committed, transient <-chan Event) <-chan 
 				case <-ctx.Done():
 					return
 				}
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()

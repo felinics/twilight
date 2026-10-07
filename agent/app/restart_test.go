@@ -335,10 +335,10 @@ func TestRestartRedispatchRetryReconcilesWithoutTakeover(t *testing.T) {
 	}
 }
 
-// Unknown dispatch responses keep one planned attempt pending. Repeated
-// interval reconciliations replay that attempt without consuming more budget,
-// and closing the Session cancels the worker.
-func TestRedispatchUnknownPendingDoesNotConsumeBudgetAndCloseStops(t *testing.T) {
+// Retryable refusals keep one planned attempt pending. Repeated interval
+// reconciliations replay that safely unaccepted attempt without consuming
+// more durable attempts, and closing the Session cancels the worker.
+func TestRedispatchRetryablePendingDoesNotConsumeAttemptsAndCloseStops(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	const sid session.SessionID = "s-redispatch-unknown"
@@ -353,7 +353,7 @@ func TestRedispatchUnknownPendingDoesNotConsumeBudgetAndCloseStops(t *testing.T)
 		t.Fatal(err)
 	}
 	attempts := &redispatchtest.Map{}
-	remote := &boundaryExecutor{failures: -1, failure: effect.ErrDispatchUnknown}
+	remote := &boundaryExecutor{failures: -1, failure: effect.ErrDispatchRetryable}
 	cfg := durablePorts(t, app.Config{
 		Kernel:    sessionkernel.Ports{Store: store2, Content: content2, Ownership: session.OpenOptions{Takeover: true}},
 		Execution: rt.ExecutionConfig{MissingEffects: reconcile.RedispatchMissing, Redispatches: attempts, MaxRedispatches: 2, RedispatchRetry: 5 * time.Millisecond},
@@ -377,7 +377,7 @@ func TestRedispatchUnknownPendingDoesNotConsumeBudgetAndCloseStops(t *testing.T)
 	key := remote.lastKey()
 	state, _, _, err := attempts.Load(ctx, key)
 	if err != nil || state.Planned != 1 || state.Dispatched != 0 || state.GivenUp {
-		t.Fatalf("redispatch state after unknown retries = %+v %v, want one pending attempt", state, err)
+		t.Fatalf("redispatch state after retryable refusals = %+v %v, want one pending attempt", state, err)
 	}
 	if err := s2.Close(ctx); err != nil {
 		t.Fatal(err)

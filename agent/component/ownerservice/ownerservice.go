@@ -71,8 +71,9 @@ type Config struct {
 	// MaxRedispatches bounds durable redispatch attempts per effect. Zero
 	// selects the runtime default.
 	MaxRedispatches int `json:"maxRedispatches,omitempty"`
-	// RedispatchRetry is the interval before retrying a temporary or unknown
-	// redispatch boundary. Zero selects the runtime default.
+	// RedispatchRetry is the interval before retrying a refusal known not to
+	// have crossed the effect boundary. Unknown boundaries are not retried.
+	// Zero selects the runtime default.
 	RedispatchRetry config.Duration `json:"redispatchRetry,omitempty"`
 	// OrphanProbe is how often waiting effects are checked for an orphaned
 	// worker record. Zero selects the runtime default.

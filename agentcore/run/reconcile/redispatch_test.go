@@ -112,7 +112,7 @@ func TestPlanRedispatchesMissingWithinBudget(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			calls := 0
+			calls, requeues := 0, 0
 			r := &Reconciler{Executions: &fakePort{state: effect.AttachmentMissing}, Missing: RedispatchMissing, Attempts: store, Epoch: 1, MaxRedispatches: 2,
 				Redispatch: func(_ context.Context, k effect.AssignmentKey) error {
 					calls++
@@ -120,14 +120,24 @@ func TestPlanRedispatchesMissingWithinBudget(t *testing.T) {
 						t.Fatalf("redispatch of %+v", k)
 					}
 					return tc.redispatch
+				},
+				Requeue: func(k effect.AssignmentKey) {
+					requeues++
+					if k != key {
+						t.Fatalf("requeue of %+v", k)
+					}
 				}}
 			decisions, err := r.Plan(ctx, "s", executingModel("c1"))
 			if err != nil || len(decisions) != 1 {
 				t.Fatalf("plan = %+v %v", decisions, err)
 			}
 			d := decisions[0]
-			if d.Verdict != tc.want || (d.Recovery != nil) != (tc.want == Dispose) || calls != tc.calls {
-				t.Fatalf("decision = %+v calls=%d, want %s calls=%d", d, calls, tc.want, tc.calls)
+			wantRequeue := 0
+			if errors.Is(tc.redispatch, effect.ErrDispatchRetryable) {
+				wantRequeue = 1
+			}
+			if d.Verdict != tc.want || (d.Recovery != nil) != (tc.want == Dispose) || calls != tc.calls || requeues != wantRequeue {
+				t.Fatalf("decision = %+v calls=%d requeues=%d, want %s calls=%d requeues=%d", d, calls, requeues, tc.want, tc.calls, wantRequeue)
 			}
 			state, _, _, err := store.Load(ctx, key)
 			if err != nil || state.Planned != tc.planned || state.Dispatched != tc.dispatched || state.GivenUp != tc.gaveUp {

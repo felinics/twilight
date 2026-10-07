@@ -59,10 +59,11 @@ type Decision struct {
 	Observed effect.AttachmentState
 	Verdict  Verdict
 	Recovery *plan.RecoveryDisposition
-	// Retry reports a transient redispatch refusal or unknown dispatch
+	// Retry reports a retryable refusal that happened before the effect
 	// boundary. No outcome watch is installed while it is true: the owner
-	// must reconcile this effect again after an interval, first re-reading
-	// the durable Run and dispatch ledger.
+	// may safely offer the same pending assignment again after an interval.
+	// An unknown dispatch never sets Retry because it may have crossed the
+	// boundary and must not trigger a compensating dispatch.
 	Retry bool
 }
 
@@ -345,9 +346,11 @@ func (r *Reconciler) plan(ctx context.Context, scope run.Scope, snapshot *store.
 // a crash between the two steps costs no budget and never leaves a Dispatch
 // the ledger does not know about; the executor recognises the replay by
 // its key (RUN-EXE-3). A refusal the executor may lift later
-// (ErrDispatchRetryable) or a lost response (ErrDispatchUnknown) leaves the
-// attempt owed and the target Executing for the next reconciliation; any
-// other rejection ends the attempts.
+// ErrDispatchRetryable leaves the attempt owed and asks for a later retry.
+// A lost response (ErrDispatchUnknown) also leaves the attempt owed, but does
+// not ask for an automatic retry because the request may have crossed the
+// effect boundary; its outcome watcher may still discover an accepted record.
+// Any definite rejection ends the attempts.
 func (r *Reconciler) missing(ctx context.Context, key effect.AssignmentKey) (Verdict, bool, error) {
 	if r.Missing == DisposeMissing {
 		return Dispose, false, nil
@@ -380,8 +383,10 @@ func (r *Reconciler) missing(ctx context.Context, key effect.AssignmentKey) (Ver
 			return Dispose, false, err
 		}
 		return Redispatch, false, nil
-	case errors.Is(err, effect.ErrDispatchRetryable), errors.Is(err, effect.ErrDispatchUnknown):
+	case errors.Is(err, effect.ErrDispatchRetryable):
 		return Defer, true, nil
+	case errors.Is(err, effect.ErrDispatchUnknown):
+		return Defer, false, nil
 	default:
 		if gerr := redispatch.GiveUp(ctx, r.Attempts, r.Epoch, key, err.Error(), r.now()); gerr != nil {
 			return Dispose, false, gerr

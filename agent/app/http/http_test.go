@@ -213,7 +213,7 @@ func TestCommandFaceDrivesASession(t *testing.T) {
 // Workspace allocation and binding through the face, and a fork before a
 // Turn whose child opens with the restore policy refused for want of a
 // snapshot (APP-WSP-5).
-func TestEventsIncludesZeroFromAndDoesNotRetryClientErrors(t *testing.T) {
+func TestEventsFromIncludesZeroAndDoesNotRetryClientErrors(t *testing.T) {
 	var (
 		mu      sync.Mutex
 		queries []string
@@ -228,14 +228,17 @@ func TestEventsIncludesZeroFromAndDoesNotRetryClientErrors(t *testing.T) {
 	defer server.Close()
 
 	client := &ownerhttp.Client{BaseURL: server.URL}
-	err := client.Events(context.Background(), "s", 0, func(ownerhttp.Event) bool { return true })
+	err := client.EventsFrom(context.Background(), "s", 0, func(ownerhttp.Event) bool { return true })
 	if !ownerhttp.IsCode(err, ownerhttp.CodeInvalid) {
-		t.Fatalf("Events error = %v, want invalid request", err)
+		t.Fatalf("EventsFrom error = %v, want invalid request", err)
+	}
+	if err := client.Events(context.Background(), "s", 0, func(ownerhttp.Event) bool { return true }); !ownerhttp.IsCode(err, ownerhttp.CodeInvalid) {
+		t.Fatalf("live Events error = %v, want invalid request", err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(queries) != 1 || queries[0] != "from=0" {
-		t.Fatalf("queries = %v, want one from=0 request", queries)
+	if len(queries) != 2 || queries[0] != "from=0" || queries[1] != "" {
+		t.Fatalf("queries = %v, want durable from=0 then live without a query", queries)
 	}
 }
 
@@ -279,7 +282,7 @@ func TestEventsReconnectsWithinCommitWithoutDuplicates(t *testing.T) {
 	defer cancel()
 	client := &ownerhttp.Client{BaseURL: server.URL}
 	var got []ledger.Position
-	if err := client.Events(ctx, "s", 0, func(e ownerhttp.Event) bool {
+	if err := client.EventsFrom(ctx, "s", 0, func(e ownerhttp.Event) bool {
 		got = append(got, e.Position)
 		return len(got) < 2
 	}); err != nil {

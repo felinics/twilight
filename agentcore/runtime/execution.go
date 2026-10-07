@@ -55,9 +55,9 @@ type ExecutionConfig struct {
 	// MaxRedispatches bounds redispatches per effect; zero selects the
 	// reconciler's default.
 	MaxRedispatches int
-	// RedispatchRetry is the interval between reconciliations after a
-	// retryable or unknown redispatch result; zero selects the recovery
-	// default.
+	// RedispatchRetry is the interval between reconciliations after the
+	// executor safely refused a redispatch before the effect boundary; zero
+	// selects the recovery default. Unknown boundaries are not redispatched.
 	RedispatchRetry time.Duration
 	// Planner, when set, is consulted between the steps of every Run with
 	// the Writer of the Session being driven: the application's in-turn

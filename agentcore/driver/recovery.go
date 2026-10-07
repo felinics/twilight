@@ -48,9 +48,10 @@ type Recovery struct {
 	// MaxRedispatches bounds redispatches per effect; zero selects the
 	// reconciler's default.
 	MaxRedispatches int
-	// RedispatchRetry is the interval between reconciliations after a
-	// redispatch ended at a retryable or unknown dispatch boundary. Zero
-	// selects DefaultRedispatchRetry.
+	// RedispatchRetry is the interval between reconciliations after the
+	// executor refused a redispatch before the effect boundary. Unknown
+	// boundaries are never automatically redispatched. Zero selects
+	// DefaultRedispatchRetry.
 	RedispatchRetry time.Duration
 	// OrphanProbe is how often an effect still waiting is attached and, when
 	// orphaned, handed to RecoverExecution by the Reconciler of a takeover;
@@ -158,11 +159,10 @@ func (r *Recovery) reconciler(lt *lifetime) *reconcile.Reconciler {
 	return rec
 }
 
-// requeue starts at most one cancellable reconciliation worker for key in
-// this Session lifetime. Every pass reloads the durable Run snapshot; the
-// Reconciler reloads the durable redispatch ledger before deciding whether
-// the pending attempt is owed. It stops when the effect is gone, is disposed,
-// reaches an accepted execution, or the Session lifetime closes.
+// requeue starts at most one cancellable reconciliation worker for a safely
+// retryable refusal in this Session lifetime. Every pass reloads the durable
+// Run snapshot and redispatch ledger. It stops when the effect is gone, is
+// disposed, reaches an accepted execution, or the Session lifetime closes.
 func (r *Recovery) requeue(lt *lifetime, key effect.AssignmentKey) {
 	lt.retryMu.Lock()
 	if lt.ctx.Err() != nil {

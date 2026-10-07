@@ -184,13 +184,24 @@ func (c *Client) Fork(ctx context.Context, parent session.SessionID, req ForkReq
 	return out, err
 }
 
-// Events streams the Session's durable events to fn until fn returns false
-// or ctx ends. It reconnects after transport loss or a server-side close,
-// resuming inclusively at the last handled commit. The complete Position is
-// used to discard the already handled prefix of that commit, so a commit
-// containing several events is neither skipped nor repeated. Client errors
-// (4xx) and malformed event data are returned without retrying.
+// Events streams the Session's events to fn until fn returns false, ctx
+// ends, or a live-only connection closes. A zero from preserves the original
+// live-only API. A positive from follows the durable stream and reconnects;
+// use EventsFrom to durably replay from commit zero.
 func (c *Client) Events(ctx context.Context, sid session.SessionID, from ledger.CommitSeq, fn func(Event) bool) error {
+	if from == 0 {
+		return c.eventsLive(ctx, sid, fn)
+	}
+	return c.EventsFrom(ctx, sid, from, fn)
+}
+
+// EventsFrom follows the Session's durable committed stream from from,
+// including commit zero. It reconnects after transport loss or a server-side
+// close, resuming inclusively at the last handled commit. The complete
+// Position discards the already handled prefix of that commit, so a commit
+// containing several events is neither skipped nor repeated. Transient
+// progress may interleave but does not advance the durable cursor.
+func (c *Client) EventsFrom(ctx context.Context, sid session.SessionID, from ledger.CommitSeq, fn func(Event) bool) error {
 	resume := from
 	var last ledger.Position
 	haveLast := false
@@ -230,6 +241,49 @@ func (c *Client) Events(ctx context.Context, sid session.SessionID, from ledger.
 			}
 		}
 	}
+}
+
+func (c *Client) eventsLive(ctx context.Context, sid session.SessionID, fn func(Event) bool) error {
+	req, err := stdhttp.NewRequestWithContext(ctx, stdhttp.MethodGet, c.url(sessionPath(sid, "/events"), nil), stdhttp.NoBody)
+	if err != nil {
+		return err
+	}
+	resp, err := c.client().Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return fmt.Errorf("owner http: events: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != stdhttp.StatusOK {
+		e := &Error{Status: resp.StatusCode, Code: CodeInternal}
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, DefaultMaxBodyBytes))
+		if json.Unmarshal(raw, e) != nil || e.Code == "" {
+			e.Code, e.Message = CodeInternal, strings.TrimSpace(string(raw))
+		}
+		e.Status = resp.StatusCode
+		return e
+	}
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64<<10), int(DefaultMaxBodyBytes))
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if !bytes.HasPrefix(line, []byte("data: ")) {
+			continue
+		}
+		var e Event
+		if err := json.Unmarshal(bytes.TrimPrefix(line, []byte("data: ")), &e); err != nil {
+			return fmt.Errorf("owner http: events: %w", err)
+		}
+		if !fn(e) {
+			return nil
+		}
+	}
+	if ctx.Err() != nil {
+		return nil
+	}
+	return scanner.Err()
 }
 
 type eventsAttemptResult struct {
