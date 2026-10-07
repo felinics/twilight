@@ -14,11 +14,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
+	"time"
+
 	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/module"
 	"github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/session"
-	"sync"
 )
 
 // Event is one item of a Session's observation stream, in either of two
@@ -62,14 +64,20 @@ type Progress struct {
 }
 
 // History reads a Session's committed history: the Store, or anything that
-// serves its ReadCommits. It is what a catch-up subscription reads before
-// it goes live.
+// serves its ReadCommits. It is the source of truth for a catch-up
+// subscription, including commits written through another Bus or owner.
 type History interface {
 	ReadCommits(context.Context, session.CommitReadRequest) (session.CommitPage, error)
 }
 
 // ErrNoHistory reports SubscribeFrom on a Bus built without a History.
 var ErrNoHistory = errors.New("observe: the bus has no history to catch up from")
+
+const (
+	subscriberBuffer   = 64
+	historyPageCommits = 64
+	historyPoll        = 100 * time.Millisecond
+)
 
 // Bus decodes applied commits and fans them out per Session. It carries
 // committed facts only; the transient observations of the running effects
@@ -82,14 +90,15 @@ type Bus struct {
 }
 
 // NewBus returns a Bus decoding through registry. history, when not nil,
-// lets SubscribeFrom catch up from the ledger; a Bus without it serves live
-// subscriptions only.
+// lets SubscribeFrom catch up from and continuously tail the ledger; a Bus
+// without it serves live subscriptions only.
 func NewBus(registry *module.Registry, history History) *Bus {
 	return &Bus{registry: registry, history: history, subs: make(map[session.SessionID]map[*subscriber]struct{})}
 }
 
 // Committed is writer.CommitObserver: one Event per committed event, in
-// commit order.
+// commit order. For durable subscriptions it is only a low-latency wake-up;
+// those subscriptions always obtain the event itself from History.
 func (b *Bus) Committed(_ context.Context, sid session.SessionID, commit ledger.Commit) {
 	b.publish(sid, b.decode(sid, &commit)...)
 }
@@ -122,47 +131,113 @@ func (b *Bus) publish(sid session.SessionID, events ...Event) {
 	}
 	b.mu.Unlock()
 	for _, s := range subs {
-		s.push(events)
+		if !s.push(events) {
+			b.detach(sid, s)
+		}
 	}
 }
 
 // Subscribe registers a subscriber to one Session's stream from this moment
-// on; the channel closes when ctx is done.
+// on; the channel closes when ctx is done. Delivery has a hard bound: a
+// subscriber which does not keep up is detached and its channel is closed,
+// rather than retaining an unbounded queue or blocking a committer.
 func (b *Bus) Subscribe(ctx context.Context, sid session.SessionID) <-chan Event {
-	s := b.attach(sid)
-	go s.drain(ctx, func() { b.detach(sid, s) })
+	s := b.attach(sid, false)
+	go func() {
+		select {
+		case <-ctx.Done():
+			s.closeLive()
+		case <-s.done:
+		}
+		b.detach(sid, s)
+	}()
 	return s.out
 }
 
-// SubscribeFrom is the catch-up form of Subscribe: every committed event of
-// the Session from CommitSeq from, in order, then the live stream. The
-// subscriber is attached before the history is read, so no commit made
-// meanwhile is lost, and a live commit the history already covered is
-// dropped, so none is delivered twice. The channel closes when ctx is done;
+// SubscribeFrom reads every committed event of the Session from CommitSeq
+// from, in order, and then continuously tails History. History remains the
+// source of truth after catch-up, so writes made through another Bus or
+// owner are discovered by bounded polling. Local Committed calls only wake
+// the tailer early. Reads are paged and the channel closes when ctx is done;
 // a read failure closes it after an Event with Err.
 func (b *Bus) SubscribeFrom(ctx context.Context, sid session.SessionID, from ledger.CommitSeq) (<-chan Event, error) {
 	if b.history == nil {
 		return nil, ErrNoHistory
 	}
-	s := b.attach(sid)
-	page, err := b.history.ReadCommits(ctx, session.CommitReadRequest{SessionID: sid, From: from})
+	s := b.attach(sid, true)
+	page, err := b.readPage(ctx, sid, from)
 	if err != nil {
 		b.detach(sid, s)
 		return nil, err
 	}
-	var history []Event
-	for i := range page.Commits {
-		history = append(history, b.decode(sid, &page.Commits[i])...)
-	}
-	s.mu.Lock()
-	s.history, s.skipBelow = history, page.Head.Next
-	s.mu.Unlock()
-	go s.drain(ctx, func() { b.detach(sid, s) })
+	go b.tail(ctx, sid, from, page, s)
 	return s.out, nil
 }
 
-func (b *Bus) attach(sid session.SessionID) *subscriber {
-	s := &subscriber{out: make(chan Event, 64), wake: make(chan struct{}, 1)}
+func (b *Bus) readPage(ctx context.Context, sid session.SessionID, from ledger.CommitSeq) (session.CommitPage, error) {
+	return b.history.ReadCommits(ctx, session.CommitReadRequest{SessionID: sid, From: from, Limit: historyPageCommits})
+}
+
+func (b *Bus) tail(ctx context.Context, sid session.SessionID, from ledger.CommitSeq, page session.CommitPage, s *subscriber) {
+	defer func() {
+		b.detach(sid, s)
+		close(s.out)
+	}()
+	cursor := from
+	for {
+		for i := range page.Commits {
+			commit := &page.Commits[i]
+			for _, event := range b.decode(sid, commit) {
+				select {
+				case s.out <- event:
+				case <-ctx.Done():
+					return
+				}
+			}
+			cursor = commit.Seq + 1
+		}
+		if !page.HasMore {
+			timer := time.NewTimer(historyPoll)
+			select {
+			case <-s.wake:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+			case <-timer.C:
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return
+			}
+		}
+		var err error
+		page, err = b.readPage(ctx, sid, cursor)
+		if err != nil {
+			if ctx.Err() == nil {
+				select {
+				case s.out <- Event{Session: sid, Err: err}:
+				case <-ctx.Done():
+				}
+			}
+			return
+		}
+	}
+}
+
+func (b *Bus) attach(sid session.SessionID, durable bool) *subscriber {
+	s := &subscriber{out: make(chan Event, subscriberBuffer), durable: durable}
+	if durable {
+		s.wake = make(chan struct{}, 1)
+	} else {
+		s.done = make(chan struct{})
+	}
 	b.mu.Lock()
 	if b.subs[sid] == nil {
 		b.subs[sid] = make(map[*subscriber]struct{})
@@ -181,64 +256,52 @@ func (b *Bus) detach(sid session.SessionID, s *subscriber) {
 	b.mu.Unlock()
 }
 
-// subscriber decouples the committer from the consumer: push appends to an
-// unbounded queue and never blocks, so a slow reader delays only its own
-// delivery, never a Commit; drain moves the history, then the queue, into
-// the channel in order and closes it when the subscription ends. skipBelow
-// is the ledger head the history covered: a live committed Event below it
-// was delivered from the history already.
+// subscriber is either a bounded live delivery channel or a durable
+// tailer's wake-up. Durable subscribers never accept event data from the
+// publisher; the tailer reads it from History.
 type subscriber struct {
-	mu        sync.Mutex
-	history   []Event
-	skipBelow ledger.CommitSeq
-	queue     []Event
-	out       chan Event
-	wake      chan struct{}
+	mu      sync.Mutex
+	out     chan Event
+	wake    chan struct{}
+	done    chan struct{}
+	durable bool
+	closed  bool
 }
 
-func (s *subscriber) push(events []Event) {
-	s.mu.Lock()
-	s.queue = append(s.queue, events...)
-	s.mu.Unlock()
-	select {
-	case s.wake <- struct{}{}:
-	default:
-	}
-}
-
-func (s *subscriber) drain(ctx context.Context, unsubscribe func()) {
-	defer func() {
-		unsubscribe()
-		close(s.out)
-	}()
-	for {
-		s.mu.Lock()
-		history, live, skipBelow := s.history, s.queue, s.skipBelow
-		s.history, s.queue = nil, nil
-		s.mu.Unlock()
-		for i := range history {
-			select {
-			case s.out <- history[i]:
-			case <-ctx.Done():
-				return
-			}
-		}
-		for i := range live {
-			e := &live[i]
-			if e.Position.Commit < skipBelow {
-				// Delivered from the history already.
-				continue
-			}
-			select {
-			case s.out <- *e:
-			case <-ctx.Done():
-				return
-			}
-		}
+// push never blocks. A full live subscriber is explicitly ended; a durable
+// subscriber merely receives a coalesced hint to poll History immediately.
+func (s *subscriber) push(events []Event) bool {
+	if s.durable {
 		select {
-		case <-s.wake:
-		case <-ctx.Done():
-			return
+		case s.wake <- struct{}{}:
+		default:
 		}
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	for i := range events {
+		select {
+		case s.out <- events[i]:
+		default:
+			close(s.out)
+			close(s.done)
+			s.closed = true
+			return false
+		}
+	}
+	return true
+}
+
+func (s *subscriber) closeLive() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.closed {
+		close(s.out)
+		close(s.done)
+		s.closed = true
 	}
 }

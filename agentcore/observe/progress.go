@@ -43,27 +43,40 @@ func (p *Progresses) publish(sid session.SessionID, events ...Event) {
 	}
 	p.mu.Unlock()
 	for _, s := range subs {
-		s.push(events)
+		if !s.push(events) {
+			p.detach(sid, s)
+		}
 	}
 }
 
 // Subscribe registers a subscriber to one Session's transient stream from
-// this moment on; the channel closes when ctx is done.
+// this moment on; the channel closes when ctx is done. A subscriber which
+// does not keep up is detached and closed at the same hard bound as a live
+// committed subscription.
 func (p *Progresses) Subscribe(ctx context.Context, sid session.SessionID) <-chan Event {
-	s := &subscriber{out: make(chan Event, 64), wake: make(chan struct{}, 1)}
+	s := &subscriber{out: make(chan Event, subscriberBuffer), done: make(chan struct{})}
 	p.mu.Lock()
 	if p.subs[sid] == nil {
 		p.subs[sid] = make(map[*subscriber]struct{})
 	}
 	p.subs[sid][s] = struct{}{}
 	p.mu.Unlock()
-	go s.drain(ctx, func() {
-		p.mu.Lock()
-		delete(p.subs[sid], s)
-		if len(p.subs[sid]) == 0 {
-			delete(p.subs, sid)
+	go func() {
+		select {
+		case <-ctx.Done():
+			s.closeLive()
+		case <-s.done:
 		}
-		p.mu.Unlock()
-	})
+		p.detach(sid, s)
+	}()
 	return s.out
+}
+
+func (p *Progresses) detach(sid session.SessionID, s *subscriber) {
+	p.mu.Lock()
+	delete(p.subs[sid], s)
+	if len(p.subs[sid]) == 0 {
+		delete(p.subs, sid)
+	}
+	p.mu.Unlock()
 }

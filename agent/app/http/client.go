@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/felinics/twilight/agent/workspace"
 	"github.com/felinics/twilight/agentcore/inbox"
@@ -185,30 +184,94 @@ func (c *Client) Fork(ctx context.Context, parent session.SessionID, req ForkReq
 	return out, err
 }
 
-// Events streams the Session's events to fn until fn returns false, ctx
-// ends or the stream closes; from > 0 starts from that commit sequence
-// (OBS-2).
+// Events streams the Session's durable events to fn until fn returns false
+// or ctx ends. It reconnects after transport loss or a server-side close,
+// resuming inclusively at the last handled commit. The complete Position is
+// used to discard the already handled prefix of that commit, so a commit
+// containing several events is neither skipped nor repeated. Client errors
+// (4xx) and malformed event data are returned without retrying.
 func (c *Client) Events(ctx context.Context, sid session.SessionID, from ledger.CommitSeq, fn func(Event) bool) error {
-	var query url.Values
-	if from > 0 {
-		query = url.Values{"from": {fmt.Sprint(uint64(from))}}
+	resume := from
+	var last ledger.Position
+	haveLast := false
+	backoff := 50 * time.Millisecond
+	for {
+		result, err := c.eventsAttempt(ctx, sid, resume, &last, &haveLast, fn)
+		if result.stopped || ctx.Err() != nil {
+			return nil
+		}
+		if !result.retry {
+			return err
+		}
+		if haveLast {
+			// Reads are commit-inclusive. Re-reading last.Commit is what
+			// makes the remaining events in that same commit available.
+			resume = last.Commit
+		}
+		if result.received {
+			backoff = 50 * time.Millisecond
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return nil
+		}
+		if backoff < time.Second {
+			backoff *= 2
+			if backoff > time.Second {
+				backoff = time.Second
+			}
+		}
 	}
+}
+
+type eventsAttemptResult struct {
+	retry    bool
+	stopped  bool
+	received bool
+}
+
+func (c *Client) eventsAttempt(
+	ctx context.Context,
+	sid session.SessionID,
+	from ledger.CommitSeq,
+	last *ledger.Position,
+	haveLast *bool,
+	fn func(Event) bool,
+) (eventsAttemptResult, error) {
+	// "from=0" is significant: its absence asks the server for the
+	// live-only stream, while its presence asks for durable history.
+	query := url.Values{"from": {fmt.Sprint(uint64(from))}}
 	req, err := stdhttp.NewRequestWithContext(ctx, stdhttp.MethodGet, c.url(sessionPath(sid, "/events"), query), stdhttp.NoBody)
 	if err != nil {
-		return err
+		return eventsAttemptResult{}, err
 	}
 	resp, err := c.client().Do(req)
 	if err != nil {
-		return fmt.Errorf("owner http: events: %w", err)
+		if ctx.Err() != nil {
+			return eventsAttemptResult{stopped: true}, nil
+		}
+		return eventsAttemptResult{retry: true}, fmt.Errorf("owner http: events: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != stdhttp.StatusOK {
 		e := &Error{Status: resp.StatusCode, Code: CodeInternal}
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, DefaultMaxBodyBytes))
-		_ = json.Unmarshal(raw, e)
+		if json.Unmarshal(raw, e) != nil || e.Code == "" {
+			e.Code, e.Message = CodeInternal, strings.TrimSpace(string(raw))
+		}
 		e.Status = resp.StatusCode
-		return e
+		return eventsAttemptResult{retry: resp.StatusCode < 400 || resp.StatusCode >= 500}, e
 	}
+
+	result := eventsAttemptResult{}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64<<10), int(DefaultMaxBodyBytes))
 	for scanner.Scan() {
@@ -218,14 +281,29 @@ func (c *Client) Events(ctx context.Context, sid session.SessionID, from ledger.
 		}
 		var e Event
 		if err := json.Unmarshal(bytes.TrimPrefix(line, []byte("data: ")), &e); err != nil {
-			return fmt.Errorf("owner http: events: %w", err)
+			return result, fmt.Errorf("owner http: events: %w", err)
 		}
+		if e.Type != "" {
+			if *haveLast && !last.Less(e.Position) {
+				continue
+			}
+			*last, *haveLast = e.Position, true
+		}
+		result.received = true
 		if !fn(e) {
-			return nil
+			result.stopped = true
+			return result, nil
 		}
 	}
-	if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) && ctx.Err() == nil {
-		return err
+	if ctx.Err() != nil {
+		result.stopped = true
+		return result, nil
 	}
-	return nil
+	// Both a clean EOF and a transport read failure are reconnectable. The
+	// durable cursor and Position de-duplication make the retry harmless.
+	result.retry = true
+	if err := scanner.Err(); err != nil {
+		return result, fmt.Errorf("owner http: events: %w", err)
+	}
+	return result, io.EOF
 }

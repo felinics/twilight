@@ -2,6 +2,7 @@ package http_test
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/felinics/twilight/agent/app"
 	ownerhttp "github.com/felinics/twilight/agent/app/http"
 	"github.com/felinics/twilight/agent/component/localagent"
@@ -13,6 +14,7 @@ import (
 	"github.com/felinics/twilight/agentcore/inbox"
 	"github.com/felinics/twilight/agentcore/inbox/inboxtest"
 	"github.com/felinics/twilight/agentcore/ledger"
+	"github.com/felinics/twilight/agentcore/module"
 	"github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/run/sessionstore"
 	"github.com/felinics/twilight/agentcore/session"
@@ -20,6 +22,7 @@ import (
 	"github.com/felinics/twilight/agentcore/sessionkernel"
 	"github.com/felinics/twilight/agentcore/turn"
 	"github.com/felinics/twilight/sdk"
+	stdhttp "net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -210,6 +213,89 @@ func TestCommandFaceDrivesASession(t *testing.T) {
 // Workspace allocation and binding through the face, and a fork before a
 // Turn whose child opens with the restore policy refused for want of a
 // snapshot (APP-WSP-5).
+func TestEventsIncludesZeroFromAndDoesNotRetryClientErrors(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		queries []string
+	)
+	server := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		mu.Lock()
+		queries = append(queries, r.URL.RawQuery)
+		mu.Unlock()
+		w.WriteHeader(stdhttp.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(ownerhttp.Error{Code: ownerhttp.CodeInvalid, Message: "bad stream"})
+	}))
+	defer server.Close()
+
+	client := &ownerhttp.Client{BaseURL: server.URL}
+	err := client.Events(context.Background(), "s", 0, func(ownerhttp.Event) bool { return true })
+	if !ownerhttp.IsCode(err, ownerhttp.CodeInvalid) {
+		t.Fatalf("Events error = %v, want invalid request", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(queries) != 1 || queries[0] != "from=0" {
+		t.Fatalf("queries = %v, want one from=0 request", queries)
+	}
+}
+
+func TestEventsReconnectsWithinCommitWithoutDuplicates(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		queries []string
+		request int
+	)
+	writeEvent := func(w stdhttp.ResponseWriter, position ledger.Position) {
+		raw, err := json.Marshal(ownerhttp.Event{
+			Session: "s", Position: position, Type: "twilight/test/event",
+			Module: module.ModuleKey{Source: module.SourceTwilight, ID: "test"},
+		})
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_, _ = w.Write(append(append([]byte("data: "), raw...), '\n', '\n'))
+	}
+	server := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		mu.Lock()
+		queries = append(queries, r.URL.Query().Get("from"))
+		request++
+		n := request
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		if n == 1 {
+			// The connection drops after the first event of commit 7.
+			writeEvent(w, ledger.Position{Commit: 7, Index: 0})
+			return
+		}
+		// Inclusive replay repeats index 0 and then supplies the event which
+		// was not received before the disconnect.
+		writeEvent(w, ledger.Position{Commit: 7, Index: 0})
+		writeEvent(w, ledger.Position{Commit: 7, Index: 1})
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client := &ownerhttp.Client{BaseURL: server.URL}
+	var got []ledger.Position
+	if err := client.Events(ctx, "s", 0, func(e ownerhttp.Event) bool {
+		got = append(got, e.Position)
+		return len(got) < 2
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []ledger.Position{{Commit: 7, Index: 0}, {Commit: 7, Index: 1}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("positions = %v, want %v", got, want)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(queries) != 2 || queries[0] != "0" || queries[1] != "7" {
+		t.Fatalf("resume queries = %v, want [0 7]", queries)
+	}
+}
+
 func TestCommandFaceWorkspacesAndFork(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()

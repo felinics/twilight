@@ -143,3 +143,87 @@ func TestSubscribeFromCatchesUpThenGoesLive(t *testing.T) {
 		t.Fatalf("SubscribeFrom without history = %v, want ErrNoHistory", err)
 	}
 }
+
+// A durable subscriber tails the shared History, not only the Committed
+// callbacks made on its own Bus. This models a Session moving between
+// owners while an observer remains connected to the first owner.
+func TestSubscribeFromTailsCommitsFromAnotherBus(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := filestoretest.Store(t)
+	reg := registry(t)
+	readerBus := observe.NewBus(reg, store)
+	writerBus := observe.NewBus(reg, store)
+	const sid session.SessionID = "cross-owner"
+	if _, err := store.Create(ctx, session.CreateRequest{SessionID: sid}); err != nil {
+		t.Fatal(err)
+	}
+	w, err := writer.NewWriters(store, reg, writer.Admission{}, session.OpenOptions{}, writer.WritersConfig{Observers: []writer.CommitObserver{writerBus}}).Writer(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close(ctx)
+
+	events, err := readerBus.SubscribeFrom(ctx, sid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitRow(t, w, "foreign", "from another bus")
+	got, positions := texts(t, events, 1)
+	if got[0] != "from another bus" || positions[0] != (ledger.Position{Commit: 0, Index: 0}) {
+		t.Fatalf("events = %v at %v", got, positions)
+	}
+}
+
+// Live committed and transient publishers have a hard per-subscriber bound.
+// A consumer that never reads is closed instead of growing an unbounded
+// queue, and publishing remains synchronous and quick.
+func TestSlowSubscribersAreClosedWithoutBlockingPublishers(t *testing.T) {
+	reg := registry(t)
+	bus := observe.NewBus(reg, nil)
+	progress := observe.NewProgresses()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	committed := bus.Subscribe(ctx, "slow-committed")
+	transient := progress.Subscribe(ctx, "slow-progress")
+	payload, err := reg.Encode(rowType, rowPayload{Text: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 1000; i++ {
+			bus.Committed(context.Background(), "slow-committed", ledger.Commit{
+				Seq: ledger.CommitSeq(i),
+				Batches: []ledger.EventBatch{{Events: []ledger.Event{{
+					Type: rowType, Payload: payload,
+				}}}},
+			})
+			progress.Publish("slow-progress", observe.Progress{Sequence: uint64(i)})
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("publishers blocked behind slow subscribers")
+	}
+
+	assertClosed := func(name string, ch <-chan observe.Event) {
+		t.Helper()
+		deadline := time.After(2 * time.Second)
+		for {
+			select {
+			case _, ok := <-ch:
+				if !ok {
+					return
+				}
+			case <-deadline:
+				t.Fatalf("%s subscriber was not closed at its bound", name)
+			}
+		}
+	}
+	assertClosed("committed", committed)
+	assertClosed("progress", transient)
+}
