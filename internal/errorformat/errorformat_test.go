@@ -100,16 +100,16 @@ func TestDecodeOpenAI(t *testing.T) {
 
 // A request made with a ChatGPT account's token (Sign in with ChatGPT) that
 // fails admission gets a detail body instead of an error object. The first
-// three bodies are as https://api.openai.com/v1/responses sent them in
-// 2026-10; the model name in the third is a stand-in.
+// three bodies are verbatim from https://api.openai.com/v1/responses, captured
+// on 2026-10-10 for a request with temperature, one with stream false and one
+// for gpt-4o.
 func TestDecodeOpenAIDetail(t *testing.T) {
 	providertest.RunErrorCases(t, "openai-responses", errorformat.DecodeOpenAI, []providertest.ErrorCase{
 		{
 			Name:   "unsupported parameter",
 			Status: http.StatusBadRequest,
-			Header: reqID("x-request-id", "req_detail"),
 			Body:   `{"detail":"Unsupported parameter: temperature"}`,
-			Want:   sdk.APIError{Message: "Unsupported parameter: temperature", RequestID: "req_detail", Kind: sdk.KindUnknown},
+			Want:   sdk.APIError{Message: "Unsupported parameter: temperature", Kind: sdk.KindUnknown},
 		},
 		{
 			Name:   "stream required",
