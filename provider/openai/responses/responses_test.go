@@ -1497,13 +1497,15 @@ func TestListModels(t *testing.T) {
 
 // OpenAI's API returns {"models":[...]} to a ChatGPT account's token. A body
 // with no data array is an error, not an empty list; an empty data array is an
-// empty list.
+// empty list. The models array is cut from the GET /v1/models response
+// captured on 2026-10-10 to two of its ten entries and three of their 52
+// fields; the other bodies are constructed.
 func TestListModels_NoDataArray(t *testing.T) {
 	tests := []struct {
 		name, body string
 		wantErr    bool
 	}{
-		{name: "models array", body: `{"models":[{"slug":"gpt-5.2","visibility":"list"}]}`, wantErr: true},
+		{name: "models array", body: `{"models":[{"slug":"gpt-6.1-sol","display_name":"GPT-6.1-Sol","visibility":"list"},{"slug":"gpt-5.5","display_name":"GPT-5.5","visibility":"hide"}]}`, wantErr: true},
 		{name: "null data", body: `{"object":"list","data":null}`, wantErr: true},
 		{name: "empty object", body: `{}`, wantErr: true},
 		{name: "empty data", body: `{"object":"list","data":[]}`},
