@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/felinics/twilight/provider/openai/completions"
@@ -1324,6 +1325,45 @@ func TestListModels(t *testing.T) {
 	}
 	if models[1].ID != "gpt-4o-mini" {
 		t.Errorf("expected second model 'gpt-4o-mini', got %q", models[1].ID)
+	}
+}
+
+// OpenAI's API returns {"models":[...]} to a ChatGPT account's token. A body
+// with no data array is an error, not an empty list; an empty data array is an
+// empty list.
+func TestListModels_NoDataArray(t *testing.T) {
+	tests := []struct {
+		name, body string
+		wantErr    bool
+	}{
+		{name: "models array", body: `{"models":[{"slug":"gpt-5.2","visibility":"list"}]}`, wantErr: true},
+		{name: "null data", body: `{"object":"list","data":null}`, wantErr: true},
+		{name: "empty object", body: `{}`, wantErr: true},
+		{name: "empty data", body: `{"object":"list","data":[]}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, tt.body)
+			}))
+			defer srv.Close()
+
+			p := completions.New(completions.WithAPIKey("test-key"), completions.WithBaseURL(srv.URL))
+			models, err := p.ListModels(context.Background())
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ListModels() = %d models, nil error; want an error", len(models))
+				}
+				if !strings.Contains(err.Error(), "no data array") {
+					t.Errorf("error = %q, want it to name the missing data array", err)
+				}
+				return
+			}
+			if err != nil || len(models) != 0 {
+				t.Fatalf("ListModels() = %d models, %v; want 0 models, nil error", len(models), err)
+			}
+		})
 	}
 }
 

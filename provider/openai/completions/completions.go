@@ -135,6 +135,10 @@ func (p *Provider) Name() string {
 	return "openai-completions"
 }
 
+// ListModels returns the models of the OpenAI-format list at /models,
+// {"object":"list","data":[...]}. A body with no data array, such as the
+// {"models":[...]} that OpenAI's API returns to a ChatGPT account's token, is
+// an error rather than an empty list.
 func (p *Provider) ListModels(ctx context.Context) ([]sdk.Model, error) {
 	resp, err := utils.FetchJSON[modelsListResponse](ctx, p.httpClient, &utils.RequestOptions{
 		Method:      http.MethodGet,
@@ -147,6 +151,9 @@ func (p *Provider) ListModels(ctx context.Context) ([]sdk.Model, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("openai: list models request failed: %w", err)
+	}
+	if resp.Data == nil {
+		return nil, errors.New("openai: list models: response has no data array")
 	}
 
 	models := make([]sdk.Model, 0, len(resp.Data))
