@@ -95,6 +95,15 @@ func TestDecodeOpenAI(t *testing.T) {
 			Body:   `not json`,
 			Want:   sdk.APIError{RequestID: "0b6c3e1a-bedrock", Kind: sdk.KindServerError},
 		},
+		{
+			// A ChatGPT account's token (Sign in with ChatGPT) gets the request
+			// ID in x-oai-request-id and no x-request-id.
+			Name:   "chatgpt token request id",
+			Status: http.StatusBadRequest,
+			Header: reqID("x-oai-request-id", "req_0123456789abcdef0123456789abcdef"),
+			Body:   `{"detail":"Stream must be set to true"}`,
+			Want:   sdk.APIError{Message: "Stream must be set to true", RequestID: "req_0123456789abcdef0123456789abcdef", Kind: sdk.KindUnknown},
+		},
 	})
 }
 

@@ -111,7 +111,9 @@ func ParseOpenAIFailedEvent(e *sdk.APIError) {
 
 // DecodeOpenAI is the error decoder for OpenAI's API and the OpenAI-compatible
 // endpoints the OpenAI-format packages are pointed at. The request ID comes
-// from x-request-id, or from x-amzn-requestid on Amazon Bedrock.
+// from x-request-id; from x-oai-request-id, which OpenAI's API sends instead
+// to a ChatGPT account's token (Sign in with ChatGPT); or from
+// x-amzn-requestid on Amazon Bedrock.
 func DecodeOpenAI(e *sdk.APIError) {
 	ParseOpenAI(e)
 	classifyOpenAI(e)
@@ -133,7 +135,7 @@ func DecodeOpenAIFailedEvent(e *sdk.APIError) {
 // classifyOpenAI sets the request ID and, when OpenAI's type or code
 // identifies one, the Kind of an APIError whose type and code are parsed.
 func classifyOpenAI(e *sdk.APIError) {
-	e.RequestID = cmp.Or(e.Header.Get("x-request-id"), e.Header.Get("x-amzn-requestid"))
+	e.RequestID = cmp.Or(e.Header.Get("x-request-id"), e.Header.Get("x-oai-request-id"), e.Header.Get("x-amzn-requestid"))
 	if k := OpenAIKind(e.Type, e.Code); k != sdk.KindUnknown {
 		e.Kind = k
 	}
