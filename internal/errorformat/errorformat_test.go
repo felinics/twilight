@@ -98,6 +98,54 @@ func TestDecodeOpenAI(t *testing.T) {
 	})
 }
 
+// A request made with a ChatGPT account's token (Sign in with ChatGPT) that
+// fails admission gets a detail body instead of an error object. The first
+// three bodies are as https://api.openai.com/v1/responses sent them in
+// 2026-10; the model name in the third is a stand-in.
+func TestDecodeOpenAIDetail(t *testing.T) {
+	providertest.RunErrorCases(t, "openai-responses", errorformat.DecodeOpenAI, []providertest.ErrorCase{
+		{
+			Name:   "unsupported parameter",
+			Status: http.StatusBadRequest,
+			Header: reqID("x-request-id", "req_detail"),
+			Body:   `{"detail":"Unsupported parameter: temperature"}`,
+			Want:   sdk.APIError{Message: "Unsupported parameter: temperature", RequestID: "req_detail", Kind: sdk.KindUnknown},
+		},
+		{
+			Name:   "stream required",
+			Status: http.StatusBadRequest,
+			Body:   `{"detail":"Stream must be set to true"}`,
+			Want:   sdk.APIError{Message: "Stream must be set to true", Kind: sdk.KindUnknown},
+		},
+		{
+			Name:   "model not supported",
+			Status: http.StatusBadRequest,
+			Body:   `{"detail":"The 'gpt-4o' model is not supported when using Codex with a ChatGPT account."}`,
+			Want:   sdk.APIError{Message: "The 'gpt-4o' model is not supported when using Codex with a ChatGPT account.", Kind: sdk.KindUnknown},
+		},
+		{
+			// A detail that is not a string is kept as its compact JSON text.
+			Name:   "structured detail",
+			Status: http.StatusUnprocessableEntity,
+			Body:   `{"detail": [{"loc": ["body", "model"], "msg": "Field required"}]}`,
+			Want:   sdk.APIError{Message: `[{"loc":["body","model"],"msg":"Field required"}]`, Kind: sdk.KindUnknown},
+		},
+		{
+			Name:   "null detail",
+			Status: http.StatusBadRequest,
+			Body:   `{"detail":null}`,
+			Want:   sdk.APIError{Kind: sdk.KindUnknown},
+		},
+		{
+			// The error object's message wins over detail.
+			Name:   "error object and detail",
+			Status: http.StatusBadRequest,
+			Body:   `{"error":{"message":"bad","type":"invalid_request_error","code":"made_up"},"detail":"ignored"}`,
+			Want:   sdk.APIError{Type: "invalid_request_error", Code: "made_up", Message: "bad", Kind: sdk.KindUnknown},
+		},
+	})
+}
+
 // The "error" event's top-level fields follow openai-go's ResponseErrorEvent:
 // https://github.com/openai/openai-go/blob/d7fd0c65cc247957d5b247ad42283fc8e4061868/responses/response.go
 // The nested shape is the one the Codex CLI reads:
