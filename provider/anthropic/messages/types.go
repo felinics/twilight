@@ -23,6 +23,7 @@ type messagesRequest struct {
 type anthropicThinking struct {
 	Type         string `json:"type"`
 	BudgetTokens int    `json:"budget_tokens,omitempty"`
+	Display      string `json:"display,omitempty"`
 }
 
 // anthropicOutputConfig maps to Anthropic's output_config object. Effort is the

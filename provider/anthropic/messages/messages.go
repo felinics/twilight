@@ -39,7 +39,23 @@ const (
 	metadataKeySignature    = "signature"
 	metadataKeyRedactedData = "redactedData"
 
-	thinkingTypeDisabled = "disabled"
+	thinkingTypeDisabled     = "disabled"
+	thinkingTypeBetweenTools = "between_tools"
+
+	// betaHeader is the request header that opts into Anthropic beta features.
+	betaHeader = "Anthropic-Beta"
+	// betaInterleavedThinking lets budget-mode thinking run between tool calls
+	// on Claude 4.5 and earlier. Adaptive thinking interleaves without it.
+	betaInterleavedThinking = "interleaved-thinking-2025-05-14"
+)
+
+// Thinking display values for ThinkingConfig.Display and WithThinkingDisplay.
+const (
+	// ThinkingDisplaySummarized returns a readable summary in thinking blocks.
+	ThinkingDisplaySummarized = "summarized"
+	// ThinkingDisplayOmitted returns thinking blocks with empty text; the
+	// signature still carries the full thinking for replay.
+	ThinkingDisplayOmitted = "omitted"
 )
 
 // ThinkingConfig controls extended thinking for Anthropic models.
@@ -50,8 +66,12 @@ const (
 // model the same wire object as a union so the illegal combination cannot be
 // built. This type remains fully supported for existing callers.
 type ThinkingConfig struct {
-	Type         string // "enabled", "adaptive", or "disabled"
+	Type         string // "enabled", "adaptive", "disabled", or "between_tools"
 	BudgetTokens int    // required when Type is "enabled"
+	// Display sets thinking.display ("summarized" or "omitted"). Empty sends
+	// nothing and leaves the model default, which is "omitted" on Claude Opus
+	// 4.7 and later. It is rejected with "disabled" and "between_tools".
+	Display string
 }
 
 // thinkingConfigUnion mirrors Anthropic's ThinkingConfigParamUnion: exactly one
@@ -62,10 +82,11 @@ type ThinkingConfig struct {
 // about. The SDK executes what a caller declared; it does not validate it, so an
 // unrecognised type reaches the wire untouched and the server decides.
 type thinkingConfigUnion struct {
-	enabled     *thinkingEnabled
-	adaptive    *thinkingAdaptive
-	disabled    *thinkingDisabled
-	passthrough *thinkingPassthrough
+	enabled      *thinkingEnabled
+	adaptive     *thinkingAdaptive
+	disabled     *thinkingDisabled
+	betweenTools *thinkingBetweenTools
+	passthrough  *thinkingPassthrough
 }
 
 // thinkingEnabled is the budget-based mode used by Claude 4.5 and earlier.
@@ -81,6 +102,10 @@ type thinkingAdaptive struct{}
 // thinkingDisabled turns extended thinking off.
 type thinkingDisabled struct{}
 
+// thinkingBetweenTools turns up-front thinking off while keeping the progress
+// updates some models write between tool calls (Claude Sonnet 5.5).
+type thinkingBetweenTools struct{}
+
 // thinkingPassthrough carries an unrecognised ThinkingConfig from the legacy
 // flat API verbatim. It is unreachable from the union constructors.
 type thinkingPassthrough struct {
@@ -94,7 +119,7 @@ func (t *thinkingConfigUnion) active() bool {
 	if t == nil {
 		return false
 	}
-	return t.enabled != nil || t.adaptive != nil || t.passthrough != nil
+	return t.enabled != nil || t.adaptive != nil || t.betweenTools != nil || t.passthrough != nil
 }
 
 // explicitBudget returns the thinking token budget the caller asked for, and
@@ -114,22 +139,37 @@ func (t *thinkingConfigUnion) explicitBudget() (int, bool) {
 }
 
 // wire renders the union into the request object, or nil when no thinking block
-// should be sent.
-func (t *thinkingConfigUnion) wire() *anthropicThinking {
+// should be sent. display is attached to the modes that produce thinking text;
+// the modes that take no other field reject it.
+func (t *thinkingConfigUnion) wire(display string) (*anthropicThinking, error) {
 	if t == nil {
-		return nil
+		if display != "" {
+			return nil, fmt.Errorf("thinking display %q needs a thinking mode", display)
+		}
+		return nil, nil
 	}
 	switch {
 	case t.enabled != nil:
-		return &anthropicThinking{Type: "enabled", BudgetTokens: t.enabled.budgetTokens}
+		return &anthropicThinking{Type: "enabled", BudgetTokens: t.enabled.budgetTokens, Display: display}, nil
 	case t.adaptive != nil:
 		// No budget field exists on this variant, so none can be sent.
-		return &anthropicThinking{Type: "adaptive"}
+		return &anthropicThinking{Type: "adaptive", Display: display}, nil
 	case t.passthrough != nil:
-		return &anthropicThinking{Type: t.passthrough.typ, BudgetTokens: t.passthrough.budgetTokens}
+		return &anthropicThinking{Type: t.passthrough.typ, BudgetTokens: t.passthrough.budgetTokens, Display: display}, nil
+	case t.disabled != nil, t.betweenTools != nil:
+		typ := thinkingTypeDisabled
+		if t.betweenTools != nil {
+			typ = thinkingTypeBetweenTools
+		}
+		if display != "" {
+			return nil, fmt.Errorf("thinking display is not valid with thinking type %q", typ)
+		}
+		// Off is sent explicitly. Claude 5 models think when the block is
+		// absent, so omitting it cannot turn thinking off there; on Claude 4.x
+		// an explicit disabled is equivalent to omitting it.
+		return &anthropicThinking{Type: typ}, nil
 	default:
-		// Disabled is expressed by omitting the block entirely.
-		return nil
+		return nil, nil
 	}
 }
 
@@ -140,6 +180,8 @@ type Provider struct {
 	httpClient                    *http.Client
 	headers                       map[string]string
 	thinking                      *thinkingConfigUnion
+	thinkingDisplay               string
+	interleavedThinking           bool
 	supportsMidConversationSystem bool
 }
 
@@ -189,6 +231,7 @@ func WithHeaders(headers map[string]string) Option {
 func WithThinking(cfg ThinkingConfig) Option {
 	return func(p *Provider) {
 		p.thinking = thinkingFromLegacyConfig(cfg)
+		p.thinkingDisplay = cfg.Display
 	}
 }
 
@@ -207,6 +250,8 @@ func thinkingFromLegacyConfig(cfg ThinkingConfig) *thinkingConfigUnion {
 		return &thinkingConfigUnion{adaptive: &thinkingAdaptive{}}
 	case thinkingTypeDisabled:
 		return &thinkingConfigUnion{disabled: &thinkingDisabled{}}
+	case thinkingTypeBetweenTools:
+		return &thinkingConfigUnion{betweenTools: &thinkingBetweenTools{}}
 	default:
 		return &thinkingConfigUnion{passthrough: &thinkingPassthrough{
 			typ:          cfg.Type,
@@ -245,14 +290,53 @@ func WithThinkingAdaptive() Option {
 	}
 }
 
-// WithThinkingDisabled turns extended thinking off by omitting the thinking
-// block from requests.
+// WithThinkingDisabled turns extended thinking off, sending
+// thinking{type:"disabled"}.
+//
+// The block is sent explicitly because Claude 5 models think when it is absent;
+// on Claude 4.x it is equivalent to omitting it. Some models reject it and
+// cannot turn thinking off at all (Claude Opus 5.5, Fable 5.x), and some accept
+// it only at effort high or below (Claude Opus 5, Haiku 5.5). The SDK does not
+// infer the model generation, so choosing it is the caller's decision.
 //
 // Note that a ReasoningEffort on the request still sends output_config.effort;
 // this option only controls the thinking block.
 func WithThinkingDisabled() Option {
 	return func(p *Provider) {
 		p.thinking = &thinkingConfigUnion{disabled: &thinkingDisabled{}}
+	}
+}
+
+// WithThinkingBetweenTools sends thinking{type:"between_tools"}, which turns
+// up-front thinking off while keeping the progress updates written between tool
+// calls. Claude Sonnet 5.5 uses it in place of "disabled", which it rejects.
+func WithThinkingBetweenTools() Option {
+	return func(p *Provider) {
+		p.thinking = &thinkingConfigUnion{betweenTools: &thinkingBetweenTools{}}
+	}
+}
+
+// WithThinkingDisplay sets thinking.display: ThinkingDisplaySummarized returns a
+// readable summary in thinking blocks, ThinkingDisplayOmitted returns them with
+// empty text. Claude Opus 4.7 and later default to omitted, so a caller that
+// shows thinking to users asks for summarized. It applies to the enabled and
+// adaptive modes; a request combining it with "disabled" or "between_tools"
+// fails before it is sent.
+func WithThinkingDisplay(display string) Option {
+	return func(p *Provider) {
+		p.thinkingDisplay = display
+	}
+}
+
+// WithInterleavedThinking adds the interleaved-thinking-2025-05-14 beta to the
+// anthropic-beta header, keeping any betas already set. Budget-mode thinking on
+// Claude 4.5 and earlier needs it to think between tool calls; adaptive
+// thinking interleaves without it. The Claude API ignores it on models that do
+// not support it, but other Anthropic-compatible endpoints may not, so it is
+// never sent by default.
+func WithInterleavedThinking() Option {
+	return func(p *Provider) {
+		p.interleavedThinking = true
 	}
 }
 
@@ -376,7 +460,28 @@ func (p *Provider) requestHeaders(ctx context.Context) map[string]string {
 	} else if p.apiKey != "" {
 		h["x-api-key"] = p.apiKey
 	}
-	return utils.RequestHeaders(ctx, h, p.headers)
+	headers := utils.RequestHeaders(ctx, h, p.headers)
+	if p.interleavedThinking {
+		headers[betaHeader] = appendBeta(headers[betaHeader], betaInterleavedThinking)
+	}
+	return headers
+}
+
+// appendBeta adds beta to a comma-separated anthropic-beta value unless it is
+// already present.
+func appendBeta(value, beta string) string {
+	var betas []string
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if item == beta {
+			return value
+		}
+		betas = append(betas, item)
+	}
+	return strings.Join(append(betas, beta), ",")
 }
 
 // ---------- DoGenerate ----------
@@ -435,7 +540,11 @@ func (p *Provider) buildRequest(params *sdk.Request) (*messagesRequest, error) {
 		req.ToolChoice = convertToolChoice(params.ToolChoice)
 	}
 
-	req.Thinking = p.thinking.wire()
+	thinking, err := p.thinking.wire(p.thinkingDisplay)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic: %w", err)
+	}
+	req.Thinking = thinking
 
 	// Reasoning effort is carried via output_config.effort. On modern Claude
 	// models (>= 4.6) this is the supported control; budget_tokens is deprecated

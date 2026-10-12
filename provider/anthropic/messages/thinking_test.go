@@ -19,6 +19,7 @@ type capturedThinking struct {
 	Thinking  *struct {
 		Type         string `json:"type"`
 		BudgetTokens *int   `json:"budget_tokens"`
+		Display      string `json:"display"`
 	} `json:"thinking"`
 	OutputConfig *struct {
 		Effort string `json:"effort"`
@@ -223,11 +224,16 @@ func TestThinkingWireShape(t *testing.T) {
 			wantType: "adaptive",
 		},
 		{
-			// Disabled thinking is expressed by omitting the block entirely,
-			// matching the pre-union behaviour.
-			name:       "disabled omits the thinking block",
-			opts:       []messages.Option{messages.WithThinkingDisabled()},
-			wantAbsent: true,
+			// Off is sent explicitly: Claude 5 models think when the block is
+			// absent, so omitting it cannot turn thinking off there.
+			name:     "disabled sends an explicit disabled block",
+			opts:     []messages.Option{messages.WithThinkingDisabled()},
+			wantType: "disabled",
+		},
+		{
+			name:     "between tools sends its own type",
+			opts:     []messages.Option{messages.WithThinkingBetweenTools()},
+			wantType: "between_tools",
 		},
 		{
 			name:       "no option omits the thinking block",
@@ -239,9 +245,9 @@ func TestThinkingWireShape(t *testing.T) {
 			wantType: "adaptive",
 		},
 		{
-			name:       "adaptive then disabled omits the block",
-			opts:       []messages.Option{messages.WithThinkingAdaptive(), messages.WithThinkingDisabled()},
-			wantAbsent: true,
+			name:     "adaptive then disabled sends disabled",
+			opts:     []messages.Option{messages.WithThinkingAdaptive(), messages.WithThinkingDisabled()},
+			wantType: "disabled",
 		},
 	}
 
@@ -305,6 +311,16 @@ func TestWithThinking_BackwardCompatibility(t *testing.T) {
 			name:   "disabled",
 			legacy: messages.ThinkingConfig{Type: "disabled"},
 			modern: []messages.Option{messages.WithThinkingDisabled()},
+		},
+		{
+			name:   "between tools",
+			legacy: messages.ThinkingConfig{Type: "between_tools"},
+			modern: []messages.Option{messages.WithThinkingBetweenTools()},
+		},
+		{
+			name:   "adaptive with display",
+			legacy: messages.ThinkingConfig{Type: "adaptive", Display: messages.ThinkingDisplaySummarized},
+			modern: []messages.Option{messages.WithThinkingAdaptive(), messages.WithThinkingDisplay(messages.ThinkingDisplaySummarized)},
 		},
 	}
 
@@ -390,5 +406,110 @@ func TestWithThinking_LegacyEmptyType(t *testing.T) {
 	}
 	if got.MaxTokens != 4096 {
 		t.Errorf("max_tokens: got %d, want 4096", got.MaxTokens)
+	}
+}
+
+// TestThinkingDisplay checks that display rides on the thinking modes that
+// produce thinking text and is rejected before sending on the modes that take
+// no other field.
+func TestThinkingDisplay(t *testing.T) {
+	t.Run("adaptive summarized", func(t *testing.T) {
+		got := captureRequest(t, []messages.Option{
+			messages.WithThinkingAdaptive(),
+			messages.WithThinkingDisplay(messages.ThinkingDisplaySummarized),
+		}, sdk.Request{})
+		if got.Thinking == nil || got.Thinking.Type != "adaptive" || got.Thinking.Display != "summarized" {
+			t.Fatalf("thinking: got %+v, want adaptive with display summarized", got.Thinking)
+		}
+	})
+	t.Run("display survives a later mode option", func(t *testing.T) {
+		got := captureRequest(t, []messages.Option{
+			messages.WithThinkingDisplay(messages.ThinkingDisplayOmitted),
+			messages.WithThinkingEnabled(4000),
+		}, sdk.Request{})
+		if got.Thinking == nil || got.Thinking.Type != "enabled" || got.Thinking.Display != "omitted" {
+			t.Fatalf("thinking: got %+v, want enabled with display omitted", got.Thinking)
+		}
+	})
+	t.Run("no display sends none", func(t *testing.T) {
+		got := captureRequest(t, []messages.Option{messages.WithThinkingAdaptive()}, sdk.Request{})
+		if got.Thinking == nil || got.Thinking.Display != "" {
+			t.Fatalf("thinking: got %+v, want no display", got.Thinking)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		opts []messages.Option
+	}{
+		{"with disabled", []messages.Option{messages.WithThinkingDisabled(), messages.WithThinkingDisplay(messages.ThinkingDisplaySummarized)}},
+		{"with between tools", []messages.Option{messages.WithThinkingBetweenTools(), messages.WithThinkingDisplay(messages.ThinkingDisplaySummarized)}},
+		{"without a thinking mode", []messages.Option{messages.WithThinkingDisplay(messages.ThinkingDisplaySummarized)}},
+	} {
+		t.Run("rejected "+tc.name, func(t *testing.T) {
+			sent := false
+			srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { sent = true }))
+			defer srv.Close()
+			opts := append([]messages.Option{messages.WithAPIKey("k"), messages.WithBaseURL(srv.URL)}, tc.opts...)
+			_, err := messages.New(opts...).DoGenerate(context.Background(), sdk.Request{
+				Model:    "claude-test",
+				Messages: []sdk.Message{sdk.UserMessage("Hi")},
+			})
+			if err == nil {
+				t.Fatal("DoGenerate: want an error for display without a thinking mode that shows text")
+			}
+			if sent {
+				t.Error("the request must fail before it is sent")
+			}
+		})
+	}
+}
+
+// TestInterleavedThinkingHeader checks the beta is added on opt-in only and
+// merged into betas set elsewhere instead of replacing them.
+func TestInterleavedThinkingHeader(t *testing.T) {
+	capture := func(t *testing.T, opts ...messages.Option) string {
+		t.Helper()
+		var beta string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			beta = r.Header.Get("anthropic-beta")
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "msg", "type": "message", "model": "claude-test", "role": "assistant",
+				"content":     []map[string]any{{"type": "text", "text": "OK"}},
+				"stop_reason": "end_turn",
+				"usage":       map[string]any{"input_tokens": 1, "output_tokens": 1},
+			})
+		}))
+		defer srv.Close()
+		all := append([]messages.Option{messages.WithAPIKey("k"), messages.WithBaseURL(srv.URL)}, opts...)
+		if _, err := messages.New(all...).DoGenerate(context.Background(), sdk.Request{
+			Model:    "claude-test",
+			Messages: []sdk.Message{sdk.UserMessage("Hi")},
+		}); err != nil {
+			t.Fatalf("DoGenerate: %v", err)
+		}
+		return beta
+	}
+
+	if got := capture(t, messages.WithThinkingEnabled(4000)); got != "" {
+		t.Errorf("default: got anthropic-beta %q, want none", got)
+	}
+	if got := capture(t, messages.WithThinkingEnabled(4000), messages.WithInterleavedThinking()); got != "interleaved-thinking-2025-05-14" {
+		t.Errorf("opt-in: got anthropic-beta %q", got)
+	}
+	got := capture(t,
+		messages.WithHeaders(map[string]string{"anthropic-beta": "context-1m-2025-08-07"}),
+		messages.WithInterleavedThinking(),
+	)
+	if got != "context-1m-2025-08-07,interleaved-thinking-2025-05-14" {
+		t.Errorf("merged: got anthropic-beta %q, want the existing beta kept", got)
+	}
+	got = capture(t,
+		messages.WithHeaders(map[string]string{"Anthropic-Beta": "interleaved-thinking-2025-05-14"}),
+		messages.WithInterleavedThinking(),
+	)
+	if got != "interleaved-thinking-2025-05-14" {
+		t.Errorf("deduplicated: got anthropic-beta %q", got)
 	}
 }

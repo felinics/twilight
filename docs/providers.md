@@ -775,7 +775,13 @@ model := provider.ChatModel("claude-sonnet-4-20250514")
 | `WithBaseURL(url)` | `https://api.anthropic.com` | Base URL for API requests |
 | `WithHTTPClient(client)` | `&http.Client{}` | Custom HTTP client |
 | `WithHeaders(headers)` | none | Provider-wide headers; request-context headers take precedence |
-| `WithThinking(config)` | `nil` | Enable extended thinking for reasoning |
+| `WithThinking(config)` | `nil` | Thinking configuration as a flat struct; prefer the options below |
+| `WithThinkingEnabled(budget)` | none | `thinking: {type: "enabled", budget_tokens}`, for Claude 4.5 and earlier |
+| `WithThinkingAdaptive()` | none | `thinking: {type: "adaptive"}`, for Claude 4.6 and later |
+| `WithThinkingDisabled()` | none | `thinking: {type: "disabled"}`, sent explicitly |
+| `WithThinkingBetweenTools()` | none | `thinking: {type: "between_tools"}`, Claude Sonnet 5.5 |
+| `WithThinkingDisplay(display)` | `""` | `thinking.display`: `summarized` or `omitted` |
+| `WithInterleavedThinking()` | off | Adds the `interleaved-thinking-2025-05-14` beta to `anthropic-beta` |
 | `WithMidConversationSystemMessages(enabled)` | `false` | Preserve interleaved system messages for models that document native support |
 
 By default, developer messages become user messages and mid-conversation
@@ -797,6 +803,21 @@ provider := messages.New(
 ```
 
 When enabled, the model's internal reasoning appears in `result.Reasoning` (non-streaming) or as `ReasoningStartPart` / `ReasoningDeltaPart` / `ReasoningEndPart` events (streaming).
+
+The SDK does not infer the model generation; pick the mode the target model accepts:
+
+- **Claude 4.5 and earlier** take `WithThinkingEnabled(budget)`. To think between tool calls in this mode, add `WithInterleavedThinking()`. The Claude API ignores the beta on models without it, but other Anthropic-compatible endpoints may reject it, so it is opt-in.
+- **Claude 4.6 and later** take `WithThinkingAdaptive()` with depth set per request through `ReasoningEffort` (`output_config.effort`). Adaptive thinking interleaves without the beta.
+- **Turning thinking off** sends `thinking: {type: "disabled"}`. It is explicit because Claude 5 models think when the block is absent; on Claude 4.x it equals omitting it. Some models reject it (Claude Opus 5.5, Fable 5.x) or accept it only at effort `high` or below (Claude Opus 5, Haiku 5.5). Claude Sonnet 5.5 turns up-front thinking off with `WithThinkingBetweenTools()` instead.
+- **Showing thinking text**: Claude Opus 4.7 and later return thinking blocks with empty text by default. `WithThinkingDisplay(messages.ThinkingDisplaySummarized)` returns a readable summary. The signature carries the full thinking either way and is replayed unchanged. Display is rejected with `disabled` and `between_tools`.
+
+```go
+provider := messages.New(
+    messages.WithAPIKey("sk-ant-..."),
+    messages.WithThinkingAdaptive(),
+    messages.WithThinkingDisplay(messages.ThinkingDisplaySummarized),
+)
+```
 
 ### Prompt Caching
 
