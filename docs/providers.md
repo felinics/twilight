@@ -916,20 +916,36 @@ The provider automatically converts SDK messages to Google's format:
 
 ### Thinking / Reasoning
 
-Gemini 2.5+ models support thinking (reasoning). The model returns parts with `thought: true` which the provider maps to `Reasoning` in the result:
+Gemini 2.5+ models support thinking (reasoning). The model returns parts with `thought: true` which the provider maps to `Reasoning` in the result. The API returns thought parts only when `includeThoughts` is true:
 
 ```go
 provider := generativeai.New(generativeai.WithAPIKey("AIza..."))
-model := provider.ChatModel("gemini-2.5-flash")
+model := provider.ChatModel("gemini-3-pro-preview")
 
+effort := "high"
 result, _ := model.Generate(ctx, sdk.Request{
     Messages: []sdk.Message{
         sdk.UserMessage("What is 15 * 37? Think step by step."),
     },
+    ReasoningEffort: &effort, // thinkingLevel HIGH, includeThoughts true
 })
 fmt.Println(result.Reasoning) // model's thinking process
 fmt.Println(result.Text)      // final answer
 ```
+
+`ReasoningEffort` maps to `thinkingLevel` (upper-cased) and sets `includeThoughts`. Tiers outside Google's enum, such as `xhigh`, are sent as-is and surface as a 400. The off spellings `none`, `disable` and `disabled` send no `thinkingConfig`, because `thinkingLevel` has no off member. To turn thinking off or to set a token budget on 2.5-generation models, use `WithThinking`:
+
+```go
+off := generativeai.ThinkingBudgetDisabled // 0; Flash/Lite only, 2.5 Pro rejects it
+provider := generativeai.New(
+    generativeai.WithAPIKey("AIza..."),
+    generativeai.WithThinking(generativeai.ThinkingConfig{ThinkingBudget: &off}),
+)
+```
+
+`WithThinking` takes precedence over `ReasoningEffort` and leaves `includeThoughts` to the caller.
+
+Thought signatures are kept per block, including on parts that carry a signature with empty text, and are replayed on the next request. In a stream, a signed thought part closes its reasoning block, matching the one-block-per-part shape of a non-streamed response.
 
 ### Supported Features
 

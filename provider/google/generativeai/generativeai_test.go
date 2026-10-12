@@ -1094,6 +1094,8 @@ func TestDoGenerate_ThinkingConfig(t *testing.T) {
 	effortMedium := "medium"
 	effortXHigh := "xhigh"
 	effortBlank := "   "
+	effortNone := "none"
+	effortDisable := "disable"
 
 	tests := []struct {
 		name            string
@@ -1148,14 +1150,16 @@ func TestDoGenerate_ThinkingConfig(t *testing.T) {
 			wantIncludeThoughts: &includeTrue,
 		},
 		{
-			name:            "only ReasoningEffort maps to uppercase thinkingLevel",
-			reasoningEffort: &effortHigh,
-			wantLevel:       "HIGH",
+			name:                "only ReasoningEffort maps to uppercase thinkingLevel",
+			reasoningEffort:     &effortHigh,
+			wantLevel:           "HIGH",
+			wantIncludeThoughts: &includeTrue,
 		},
 		{
-			name:            "ReasoningEffort medium maps to thinkingLevel MEDIUM",
-			reasoningEffort: &effortMedium,
-			wantLevel:       "MEDIUM",
+			name:                "ReasoningEffort medium maps to thinkingLevel MEDIUM",
+			reasoningEffort:     &effortMedium,
+			wantLevel:           "MEDIUM",
+			wantIncludeThoughts: &includeTrue,
 		},
 		{
 			name: "WithThinking overrides ReasoningEffort (provider option wins)",
@@ -1177,8 +1181,9 @@ func TestDoGenerate_ThinkingConfig(t *testing.T) {
 			providerOpts: []generativeai.Option{
 				generativeai.WithThinking(generativeai.ThinkingConfig{}),
 			},
-			reasoningEffort: &effortHigh,
-			wantLevel:       "HIGH",
+			reasoningEffort:     &effortHigh,
+			wantLevel:           "HIGH",
+			wantIncludeThoughts: &includeTrue,
 		},
 		{
 			name: "empty WithThinking with no effort omits thinkingConfig",
@@ -1198,9 +1203,22 @@ func TestDoGenerate_ThinkingConfig(t *testing.T) {
 		{
 			// Tiers outside Google's enum are upper-cased and sent as-is rather
 			// than being remapped to a supported neighbour; the API returns 400.
-			name:            "unsupported tier is passed through uppercased",
-			reasoningEffort: &effortXHigh,
-			wantLevel:       "XHIGH",
+			name:                "unsupported tier is passed through uppercased",
+			reasoningEffort:     &effortXHigh,
+			wantLevel:           "XHIGH",
+			wantIncludeThoughts: &includeTrue,
+		},
+		{
+			// thinkingLevel has no off member; "NONE" would be a 400. Off on
+			// Gemini is an explicit WithThinking budget of 0.
+			name:            "off effort none sends no thinkingConfig",
+			reasoningEffort: &effortNone,
+			wantAbsent:      true,
+		},
+		{
+			name:            "off effort disable sends no thinkingConfig",
+			reasoningEffort: &effortDisable,
+			wantAbsent:      true,
 		},
 		{
 			name:            "whitespace-only effort omits thinkingConfig",

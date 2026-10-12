@@ -67,6 +67,18 @@ func normalizeThinkingLevel(level string) string {
 	return strings.ToUpper(strings.TrimSpace(level))
 }
 
+// isThinkingOffLevel reports whether a normalized effort asks for no thinking.
+// thinkingLevel has no off member, so these spellings are never sent as a tier:
+// "NONE" would be a 400. Turning thinking off on Gemini is a budget of 0, which
+// only some models accept, so it stays an explicit WithThinking choice.
+func isThinkingOffLevel(level string) bool {
+	switch level {
+	case "NONE", "DISABLE", "DISABLED":
+		return true
+	}
+	return false
+}
+
 type Provider struct {
 	headers    map[string]string
 	apiKey     string
@@ -309,7 +321,13 @@ func (p *Provider) buildRequest(req *sdk.Request) (*generateRequest, error) {
 	// ("MINIMAL", "LOW", "MEDIUM", "HIGH"), while effort tiers elsewhere in this
 	// SDK are lowercase. Upper-casing here is dialect translation, not
 	// validation: tiers outside Google's enum (e.g. "xhigh") are still passed
-	// through and surface as a 400 rather than being silently remapped.
+	// through and surface as a 400 rather than being silently remapped. The
+	// off spellings are the exception: the enum has no off member, so they send
+	// no thinkingConfig and leave the model on its default.
+	//
+	// An effort asks for thinking, and the API returns thought parts only when
+	// includeThoughts is true, so the effort path sets it. WithThinking keeps
+	// full control over the field.
 	//
 	// No mutual-exclusion check and no budget-range validation are performed;
 	// both would require the SDK to encode knowledge about which model
@@ -324,8 +342,9 @@ func (p *Provider) buildRequest(req *sdk.Request) (*generateRequest, error) {
 		}
 		genCfg.ThinkingConfig = tc
 	case req.ReasoningEffort != nil:
-		if level := normalizeThinkingLevel(*req.ReasoningEffort); level != "" {
-			genCfg.ThinkingConfig = &thinkingConfig{ThinkingLevel: level}
+		if level := normalizeThinkingLevel(*req.ReasoningEffort); level != "" && !isThinkingOffLevel(level) {
+			includeThoughts := true
+			genCfg.ThinkingConfig = &thinkingConfig{ThinkingLevel: level, IncludeThoughts: &includeThoughts}
 		}
 	}
 
@@ -554,7 +573,9 @@ func (p *Provider) parseResponse(resp *generateResponse) (sdk.ModelResult, error
 					Input:            sdk.ParseToolArguments(string(part.FunctionCall.Args)),
 					ProviderMetadata: googleThoughtSignatureMetadata(part.ThoughtSignature),
 				})
-			case part.Text != "":
+			// A part may carry only a signature with empty text; the signature
+			// still has to be kept so it can be replayed.
+			case part.Text != "" || part.ThoughtSignature != "":
 				isThought := part.Thought != nil && *part.Thought
 				if isThought {
 					// Each thought part is its own block: a signature is bound
@@ -640,8 +661,20 @@ func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.St
 			}
 		}
 
+		// The signature belongs to the block it closes; clearing it keeps a
+		// later block from inheriting it.
 		reasoningEndMeta := func() sdk.ProviderMetadata {
-			return googleThoughtSignatureMetadata(lastThoughtSig)
+			meta := googleThoughtSignatureMetadata(lastThoughtSig)
+			lastThoughtSig = ""
+			return meta
+		}
+
+		endReasoning := func() {
+			if !reasoningStartSent {
+				return
+			}
+			send(&sdk.ReasoningEndPart{ID: currentReasoningID, Format: sdk.ReasoningFormatGoogle, Model: streamModel, ProviderMetadata: reasoningEndMeta()})
+			reasoningStartSent = false
 		}
 
 		textEndMeta := func() sdk.ProviderMetadata {
@@ -658,10 +691,7 @@ func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.St
 				return
 			}
 			flushed = true
-			if reasoningStartSent {
-				send(&sdk.ReasoningEndPart{ID: currentReasoningID, Format: sdk.ReasoningFormatGoogle, Model: streamModel, ProviderMetadata: reasoningEndMeta()})
-				reasoningStartSent = false
-			}
+			endReasoning()
 			if textStartSent {
 				send(&sdk.TextEndPart{ID: currentTextID, ProviderMetadata: textEndMeta()})
 				textStartSent = false
@@ -709,10 +739,7 @@ func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.St
 				for _, part := range candidate.Content.Parts {
 					switch {
 					case part.FunctionCall != nil:
-						if reasoningStartSent {
-							send(&sdk.ReasoningEndPart{ID: currentReasoningID, Format: sdk.ReasoningFormatGoogle, Model: streamModel, ProviderMetadata: reasoningEndMeta()})
-							reasoningStartSent = false
-						}
+						endReasoning()
 						if textStartSent {
 							send(&sdk.TextEndPart{ID: currentTextID})
 							textStartSent = false
@@ -738,12 +765,11 @@ func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.St
 							Input:            sdk.ParseToolArguments(argsStr),
 							ProviderMetadata: googleThoughtSignatureMetadata(part.ThoughtSignature),
 						})
-					case part.Text != "":
+					// A part may carry only a signature with empty text; the
+					// signature still has to reach the block it belongs to.
+					case part.Text != "" || part.ThoughtSignature != "":
 						isThought := part.Thought != nil && *part.Thought
 						if isThought {
-							if part.ThoughtSignature != "" {
-								lastThoughtSig = part.ThoughtSignature
-							}
 							if textStartSent {
 								send(&sdk.TextEndPart{ID: currentTextID})
 								textStartSent = false
@@ -754,12 +780,20 @@ func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.St
 								send(&sdk.ReasoningStartPart{ID: currentReasoningID, Format: sdk.ReasoningFormatGoogle, Model: streamModel})
 								reasoningStartSent = true
 							}
-							send(&sdk.ReasoningDeltaPart{ID: currentReasoningID, Text: part.Text, Format: sdk.ReasoningFormatGoogle, Model: streamModel})
-						} else {
-							if reasoningStartSent {
-								send(&sdk.ReasoningEndPart{ID: currentReasoningID, Format: sdk.ReasoningFormatGoogle, Model: streamModel, ProviderMetadata: reasoningEndMeta()})
-								reasoningStartSent = false
+							if part.Text != "" {
+								send(&sdk.ReasoningDeltaPart{ID: currentReasoningID, Text: part.Text, Format: sdk.ReasoningFormatGoogle, Model: streamModel})
 							}
+							// A signature is bound to the part that carries it, so
+							// the block ends here, as each thought part is its own
+							// block in a non-streamed response. A later thought
+							// part opens a new block instead of merging into this
+							// one.
+							if part.ThoughtSignature != "" {
+								lastThoughtSig = part.ThoughtSignature
+								endReasoning()
+							}
+						} else {
+							endReasoning()
 							if !textStartSent {
 								currentTextID = fmt.Sprintf("%d", blockCounter)
 								blockCounter++
@@ -772,17 +806,16 @@ func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.St
 							if part.ThoughtSignature != "" {
 								lastTextSig = part.ThoughtSignature
 							}
-							send(&sdk.TextDeltaPart{ID: currentTextID, Text: part.Text})
+							if part.Text != "" {
+								send(&sdk.TextDeltaPart{ID: currentTextID, Text: part.Text})
+							}
 						}
 					case part.InlineData != nil:
 						if textStartSent {
 							send(&sdk.TextEndPart{ID: currentTextID, ProviderMetadata: textEndMeta()})
 							textStartSent = false
 						}
-						if reasoningStartSent {
-							send(&sdk.ReasoningEndPart{ID: currentReasoningID, Format: sdk.ReasoningFormatGoogle, Model: streamModel, ProviderMetadata: reasoningEndMeta()})
-							reasoningStartSent = false
-						}
+						endReasoning()
 						send(&sdk.StreamFilePart{
 							File: sdk.GeneratedFile{
 								Data:      part.InlineData.Data,
