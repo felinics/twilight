@@ -1581,6 +1581,7 @@ func TestGenerate_MiniMaxReasoningDetailsPreserved(t *testing.T) {
 		completions.WithAPIKey("k"),
 		completions.WithBaseURL(srv.URL),
 		completions.WithMiniMaxChatCompletionsCompat(),
+		completions.WithReasoningReplay(sdk.ReasoningReplay{Field: sdk.ReasoningReplayDetails}),
 	)
 	model := p.ChatModel("MiniMax-M3")
 	result, err := model.Generate(context.Background(), sdk.Request{Messages: []sdk.Message{sdk.UserMessage("hi")}})
@@ -1673,9 +1674,9 @@ func TestDoStream_MiniMaxReasoningDetails(t *testing.T) {
 
 func minimaxReasoningDetailsFromTestMetadata(t *testing.T, meta sdk.ProviderMetadata) []map[string]any {
 	t.Helper()
-	raw := meta.Get("minimax", "reasoning_details")
+	raw := meta.Get("openai-chat", "reasoning_details")
 	if raw == "" {
-		t.Fatalf("expected minimax metadata, got %#v", meta)
+		t.Fatalf("expected reasoning_details metadata, got %#v", meta)
 	}
 	var details []map[string]any
 	if err := json.Unmarshal([]byte(raw), &details); err != nil {

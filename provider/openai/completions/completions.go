@@ -23,6 +23,7 @@ type Provider struct {
 	httpClient     *http.Client
 	prepareRequest func(*http.Request) error
 	compat         chatCompletionsCompat
+	replay         sdk.ReasoningReplay
 	messageRoles   sdk.MessageRoleCapabilities
 }
 
@@ -89,6 +90,8 @@ func WithMessageRoleCapabilities(capabilities sdk.MessageRoleCapabilities) Optio
 
 // WithDeepSeekChatCompletionsCompat maps reasoning_effort "none" to DeepSeek's
 // thinking disable toggle while keeping the generic Chat Completions provider.
+// It does not configure reasoning replay: DeepSeek in thinking mode with tools
+// needs WithReasoningReplay(sdk.ReasoningReplay{Required: true}).
 func WithDeepSeekChatCompletionsCompat() Option {
 	return func(p *Provider) {
 		p.compat = chatCompletionsCompatDeepSeek
@@ -99,6 +102,9 @@ func WithDeepSeekChatCompletionsCompat() Option {
 // Completions transport: it sends reasoning_split=true so thinking is returned
 // in reasoning_details instead of inline <think> tags, and maps reasoning
 // efforts onto MiniMax's thinking toggle (none -> disabled, otherwise adaptive).
+// It does not configure reasoning replay: MiniMax reads its reasoning back from
+// reasoning_details, which needs
+// WithReasoningReplay(sdk.ReasoningReplay{Field: sdk.ReasoningReplayDetails}).
 func WithMiniMaxChatCompletionsCompat() Option {
 	return func(p *Provider) {
 		p.compat = chatCompletionsCompatMiniMax
@@ -110,6 +116,8 @@ func WithMiniMaxChatCompletionsCompat() Option {
 // Schema than the standard: when a schema uses anyOf, every anyOf branch must
 // declare its own "type" rather than inheriting one from the parent schema.
 // This rewrites outgoing tool parameter schemas to satisfy that constraint.
+// It does not configure reasoning replay: Kimi with thinking enabled needs
+// WithReasoningReplay(sdk.ReasoningReplay{Required: true}).
 func WithKimiChatCompletionsCompat() Option {
 	return func(p *Provider) {
 		p.compat = chatCompletionsCompatKimi
@@ -289,7 +297,10 @@ func (p *Provider) buildRequest(req *sdk.Request) (*chatRequest, error) {
 	if err := p.applyChatCompletionsCompat(chatReq); err != nil {
 		return nil, err
 	}
-	padThinkingReplay(chatReq.Messages, p.compat)
+	if err := validateReplay(p.replay); err != nil {
+		return nil, fmt.Errorf("openai: %w", err)
+	}
+	applyReasoningReplay(chatReq.Messages, p.replay)
 	if err := sdk.ApplyProviderOptions(p.Name(), req.ProviderOptions, chatReq); err != nil {
 		return nil, fmt.Errorf("openai: %w", err)
 	}
@@ -435,9 +446,7 @@ func convertAssistantMessage(msg sdk.Message) chatMessage {
 			}
 			reasoning += p.Text
 			hasReasoning = true
-			if details := extractMiniMaxReasoningDetails(p.ProviderMetadata); len(details) > 0 {
-				reasoningDetails = details
-			}
+			reasoningDetails = append(reasoningDetails, extractReasoningDetails(p.ProviderMetadata)...)
 		default:
 			contentParts = append(contentParts, part)
 		}
@@ -446,9 +455,11 @@ func convertAssistantMessage(msg sdk.Message) chatMessage {
 	if len(contentParts) > 0 {
 		cm.Content = convertContent(contentParts)
 	}
+	// Both forms are kept here; applyReasoningReplay sends the configured one.
 	if len(reasoningDetails) > 0 {
 		cm.ReasoningDetails = reasoningDetails
-	} else if hasReasoning {
+	}
+	if hasReasoning {
 		// An empty block is still a block the model emitted: keep the key so
 		// thinking-mode endpoints see the step's reasoning was passed back.
 		cm.ReasoningContent = &reasoning
@@ -529,7 +540,7 @@ func (p *Provider) parseResponse(resp *chatResponse) (sdk.ModelResult, error) {
 				Text:             result.Reasoning,
 				Format:           sdk.ReasoningFormatOpenAIChat,
 				Model:            resp.Model,
-				ProviderMetadata: minimaxReasoningMetadata(choice.Message.ReasoningDetails),
+				ProviderMetadata: reasoningDetailsMetadata(choice.Message.ReasoningDetails),
 			}}
 		}
 		result.FinishReason = mapFinishReason(choice.FinishReason)
@@ -686,18 +697,25 @@ func reasoningFromDelta(d *chatChunkDelta) string {
 	return d.Reasoning
 }
 
+// reasoningTextFromDetails returns the readable text of the last detail that
+// has any: reasoning.text entries carry text, reasoning.summary entries carry
+// summary, and reasoning.encrypted entries carry none.
 func reasoningTextFromDetails(details []chatReasoningDetail) string {
 	for i := len(details) - 1; i >= 0; i-- {
 		if text, _ := details[i]["text"].(string); text != "" {
 			return text
 		}
+		if summary, _ := details[i]["summary"].(string); summary != "" {
+			return summary
+		}
 	}
 	return ""
 }
 
-// minimaxReasoningMetadata carries MiniMax's reasoning_details on the part as
-// their JSON encoding, the opaque token the replay puts back on the wire.
-func minimaxReasoningMetadata(details []chatReasoningDetail) sdk.ProviderMetadata {
+// reasoningDetailsMetadata carries the endpoint's reasoning_details on the part
+// as their JSON encoding, the opaque token a sdk.ReasoningReplayDetails replay puts
+// back on the wire unchanged.
+func reasoningDetailsMetadata(details []chatReasoningDetail) sdk.ProviderMetadata {
 	if len(details) == 0 {
 		return nil
 	}
@@ -705,11 +723,16 @@ func minimaxReasoningMetadata(details []chatReasoningDetail) sdk.ProviderMetadat
 	if err != nil {
 		return nil
 	}
-	return sdk.NewProviderMetadata(minimaxNamespace, map[string]string{minimaxKeyReasoningDetails: string(raw)})
+	return sdk.NewProviderMetadata(metadataNamespace, map[string]string{metadataKeyReasoningDetails: string(raw)})
 }
 
-func extractMiniMaxReasoningDetails(meta sdk.ProviderMetadata) []chatReasoningDetail {
-	raw := meta.Get(minimaxNamespace, minimaxKeyReasoningDetails)
+// extractReasoningDetails reads the preserved reasoning_details. Parts stored
+// before the namespace became provider-neutral carry them under "minimax".
+func extractReasoningDetails(meta sdk.ProviderMetadata) []chatReasoningDetail {
+	raw := meta.Get(metadataNamespace, metadataKeyReasoningDetails)
+	if raw == "" {
+		raw = meta.Get(legacyMiniMaxNamespace, metadataKeyReasoningDetails)
+	}
 	if raw == "" {
 		return nil
 	}
@@ -721,17 +744,10 @@ func extractMiniMaxReasoningDetails(meta sdk.ProviderMetadata) []chatReasoningDe
 }
 
 const (
-	minimaxNamespace           = "minimax"
-	minimaxKeyReasoningDetails = "reasoning_details"
+	metadataNamespace           = "openai-chat"
+	legacyMiniMaxNamespace      = "minimax"
+	metadataKeyReasoningDetails = "reasoning_details"
 )
-
-func copyReasoningDetails(details []chatReasoningDetail) []chatReasoningDetail {
-	out := make([]chatReasoningDetail, 0, len(details))
-	for _, detail := range details {
-		out = append(out, copyReasoningDetail(detail))
-	}
-	return out
-}
 
 func copyReasoningDetail(detail map[string]any) chatReasoningDetail {
 	out := make(chatReasoningDetail, len(detail))

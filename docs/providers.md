@@ -42,6 +42,9 @@ type Model struct {
     ID          string
     DisplayName string
     Provider    Provider
+
+    // Optional metadata: modalities, context window, output limit, tool and
+    // structured output support, reasoning controls. See the API reference.
 }
 ```
 
@@ -190,9 +193,10 @@ model := provider.ChatModel("gpt-4o-mini")
 | `WithHTTPClient(client)` | `&http.Client{}` | Custom HTTP client (for proxies, timeouts, etc.) |
 | `WithHeaders(headers)` | none | Provider-wide headers; request-context headers take precedence |
 | `WithMessageRoleCapabilities(capabilities)` | developer + mid-system enabled | Override instruction roles for a less-capable OpenAI-compatible endpoint |
-| `WithDeepSeekChatCompletionsCompat()` | disabled | Map `WithReasoningEffort("none")` to DeepSeek's thinking disable toggle; always send `reasoning_content` on replayed tool-call messages |
+| `WithReasoningReplay(replay)` | `reasoning_content`, not required | Field that carries assistant reasoning on replay, and whether every tool-call message must carry it; see [Replaying reasoning](#replaying-reasoning) |
+| `WithDeepSeekChatCompletionsCompat()` | disabled | Map `WithReasoningEffort("none")` to DeepSeek's thinking disable toggle |
 | `WithMiniMaxChatCompletionsCompat()` | disabled | Send `reasoning_split: true` and map reasoning effort to MiniMax's thinking toggle |
-| `WithKimiChatCompletionsCompat()` | disabled | Rewrite tool schemas to Moonshot-flavored JSON Schema; always send `reasoning_content` on replayed tool-call messages |
+| `WithKimiChatCompletionsCompat()` | disabled | Rewrite tool schemas to Moonshot-flavored JSON Schema |
 
 ### API Endpoints for Discovery
 
@@ -215,6 +219,7 @@ provider := completions.New(
     completions.WithAPIKey("your-deepseek-key"),
     completions.WithBaseURL("https://api.deepseek.com"),
     completions.WithDeepSeekChatCompletionsCompat(),
+    completions.WithReasoningReplay(sdk.ReasoningReplay{Required: true}),
 )
 ```
 
@@ -230,40 +235,55 @@ Note: `"none"` is the effort floor, which for DeepSeek means off. Sending
 `reasoning_effort: "none"` alone does not stop it thinking, so the provider sends
 `thinking: {type: "disabled"}` instead.
 
-#### Replaying thinking-mode tool calls
+#### Replaying reasoning
+
+Chat Completions has no standard field for a step's reasoning, and endpoints
+that return it on a side channel read it back from the same field on later
+requests. `WithReasoningReplay` sets the field and whether it is required:
+
+| `sdk.ReasoningReplay.Field` | Sent on replayed assistant messages | Endpoints |
+|-----------------------------|-------------------------------------|-----------|
+| `sdk.ReasoningReplayContent` (default) | reasoning text as `reasoning_content` | DeepSeek, Kimi, GLM, Qwen |
+| `sdk.ReasoningReplayDetails` | the `reasoning_details` array the endpoint returned, unchanged | OpenRouter, MiniMax |
+| `sdk.ReasoningReplayReasoning` | reasoning text as `reasoning` | gateways that read `reasoning` |
+
+Only the configured field is sent. `reasoning_details` is the only form that
+carries signatures and encrypted reasoning, so it is what OpenRouter needs to
+continue a hosted model's reasoning across tool calls. The provider keeps the
+array a response or stream returned on the step's `ReasoningPart`, under the
+`openai-chat` metadata namespace, merging streamed pieces by `index` with every
+field kept. A step without preserved details sends no `reasoning_details`.
 
 In thinking mode, DeepSeek validates replayed history when the request carries
-tools: every assistant message with `tool_calls` after the last user message
-must carry a `reasoning_content` key, or the API answers
+tools: every assistant message with `tool_calls` must carry a
+`reasoning_content` key, or the API answers
 `400 The reasoning_content in the thinking mode must be passed back to the API`.
-An empty string passes. DeepSeek fills the gap itself while the `tool_call` id
-is fresh, so the error surfaces on continuations of persisted history, such as
-resuming after a tool approval, when a step produced no reasoning or the stored
-message lost it. Moonshot/Kimi enforces the same rule for every assistant
-tool-call message when thinking is enabled.
+An empty string passes. Moonshot/Kimi enforces the same rule when thinking is
+enabled. `Required: true` pads every assistant tool-call message that has no
+reasoning with an empty value of the text field:
 
-The provider handles this on both sides of the wire.
+| Situation | Text field on assistant tool-call messages without a `ReasoningPart` |
+|-----------|------------------------------------------------------|
+| `Required: true` | `""` |
+| Any message in the request already carries the field | `""` |
+| Otherwise | omitted, since plain OpenAI rejects unknown message fields |
+
+`Required` has no effect with `sdk.ReasoningReplayDetails`: an empty array
+carries nothing.
 
 On the response side, a `reasoning_content` key that is present but empty is
 recorded as a `ReasoningPart` with empty text in the `openai-chat-v1` dialect.
 DeepSeek returns `"reasoning_content": ""` for a thinking-mode step that
-produced no reasoning (the first streamed delta carries it too) and omits the
-key entirely when thinking is disabled, so key presence is the signal. The
-step's assistant message therefore keeps a record that it was a thinking-mode
-step, and `ModelResult.ReasoningParts` may contain a part whose `Text` is
-empty.
+produced no reasoning and omits the key when thinking is disabled, so key
+presence is the signal, and such a step replays with the key it needs.
 
-On the request side, an `openai-chat-v1` `ReasoningPart` is always sent as
-`reasoning_content`, `""` included. Assistant tool-call messages that carry no
-`ReasoningPart` at all, such as history persisted before this behaviour or
-history whose reasoning was dropped upstream, are padded with an empty key in
-two cases:
+A model that carries its metadata passes its replay setting as is:
 
-| Situation | `reasoning_content` on assistant tool-call messages without a `ReasoningPart` |
-|-----------|------------------------------------------------------|
-| DeepSeek or Kimi compatibility option enabled | `""` |
-| Any message in the request already carries `reasoning_content` | `""` |
-| Otherwise | omitted, since plain OpenAI rejects unknown message fields |
+```go
+if r := model.Reasoning; r != nil && r.Replay != nil {
+    opts = append(opts, completions.WithReasoningReplay(*r.Replay))
+}
+```
 
 MiniMax also uses the OpenAI-compatible endpoint, but ignores `reasoning_effort`
 and, by default, inlines reasoning into `content` as `<think>` tags. Enable the
@@ -275,6 +295,7 @@ provider := completions.New(
     completions.WithAPIKey("your-minimax-key"),
     completions.WithBaseURL("https://api.minimax.io/v1"),
     completions.WithMiniMaxChatCompletionsCompat(),
+    completions.WithReasoningReplay(sdk.ReasoningReplay{Field: sdk.ReasoningReplayDetails}),
 )
 ```
 
@@ -289,9 +310,10 @@ The option always sends `reasoning_split: true` (so reasoning is returned in
 | any other `WithReasoningEffort(...)` value | `thinking: {type: "adaptive"}` |
 | no reasoning effort | `thinking` omitted (MiniMax default) |
 
-Reasoning is read from `reasoning_details` and preserved in assistant history, so
-MiniMax otherwise uses the generic Chat Completions path with minimal special
-handling.
+Reasoning is read from `reasoning_details` and preserved on the step's
+`ReasoningPart`. MiniMax reads it back from `reasoning_details`, which is why the
+example sets `sdk.ReasoningReplayDetails`; the compatibility option does not set a
+replay policy.
 
 Other OpenAI-compatible services use `completions.New()` with a base URL:
 
@@ -364,7 +386,7 @@ The `provider/openai/responses` package provides an implementation for the OpenA
 | **Input format** | Nested `messages` array | Flat `input` array |
 | **Compatibility** | Broad (DeepSeek, Groq, Ollama, Azure-style compatible endpoints, etc.) | OpenAI and OpenRouter |
 
-Use **Completions** when you need broad compatibility with OpenAI-compatible endpoints. Add `WithDeepSeekChatCompletionsCompat()` when `WithReasoningEffort("none")` should disable DeepSeek thinking. Use **Responses** when you want native reasoning model support (o3, o4-mini) or URL citation annotations.
+Use **Completions** when you need broad compatibility with OpenAI-compatible endpoints. Add `WithDeepSeekChatCompletionsCompat()` when `WithReasoningEffort("none")` should disable DeepSeek thinking, and `WithReasoningReplay` for the endpoint's reasoning field. Use **Responses** when you want native reasoning model support (o3, o4-mini) or URL citation annotations.
 
 ### Basic Usage
 

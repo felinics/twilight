@@ -113,15 +113,51 @@ type Model struct {
     ID          string
     DisplayName string
     Provider    Provider
+
+    // Optional metadata; a zero value means not stated.
+    Description      string
+    Modalities       Modalities      // Input, Output: text, image, audio, video, pdf
+    ContextWindow    int
+    MaxOutputTokens  int
+    ToolCall         bool
+    StructuredOutput bool
+    Reasoning        *ModelReasoning // nil: does not reason, or not stated
+}
+
+type ModelReasoning struct {
+    Toggle  bool                // separate on/off field
+    Efforts []string            // levels that turn reasoning on: minimal … max
+    Budget  *ReasoningBudget    // token budget range
+    Off     ReasoningOffSupport // accepted, low_effort_only, rejected
+    Dialect ReasoningDialect    // tier, budget, toggle, adaptive
+    Default *ReasoningDefault   // what the model does when the request sets nothing
+    Replay  *ReasoningReplay    // Chat Completions field reasoning is read back from
+}
+
+type ReasoningReplay struct {
+    Field    ReasoningReplayField // reasoning_content (default), reasoning_details, reasoning
+    Required bool                 // pad tool-call messages with an empty text field
 }
 ```
 
-`Model` is a chat model; embedding models are `EmbeddingModel`.
+`Model` is a chat model; embedding models are `EmbeddingModel`. `ID` and
+`Provider` identify the model; providers fill what their API reports. The rest
+describes what the model can do and is usually filled by the caller from its
+own model catalog. The reasoning fields separate what the model
+can do (`Toggle`, `Efforts`, `Budget`, `Off`) from the request shape
+(`Dialect`), what it does when asked for nothing (`Default`, for example
+Claude 4.x does not reason by default and Claude 5 does), and how a Chat
+Completions host reads reasoning back (`Replay`). `Efforts` lists only levels
+that turn reasoning on; off is `Off` and the default is `Default`.
 
 #### Methods
 
 ```go
 func (m *Model) Test(ctx context.Context) (*ModelTestResult, error)
+func (m *Model) Accepts(modality Modality) bool  // input modality
+func (m *Model) Produces(modality Modality) bool // output modality
+func (r *ModelReasoning) Controllable() bool     // any control at all
+func (r *ModelReasoning) CanTurnOff() bool       // Off, or Toggle when Off is unknown
 ```
 
 Checks whether this model is supported by its provider. Delegates to `Provider.TestModel`.
@@ -1215,7 +1251,17 @@ func WithHeaders(headers map[string]string) Option
 func WithMessageRoleCapabilities(capabilities sdk.MessageRoleCapabilities) Option
 func WithDeepSeekChatCompletionsCompat() Option
 func WithMiniMaxChatCompletionsCompat() Option
+func WithKimiChatCompletionsCompat() Option
+func WithReasoningReplay(replay sdk.ReasoningReplay) Option
 ```
+
+`WithReasoningReplay` sets the field that carries assistant reasoning on
+replayed messages and whether every tool-call message must carry it. The
+default is `reasoning_content`, added to bare tool calls only once the
+conversation already carries it. The compatibility options below do not set a
+replay policy: DeepSeek and Kimi in thinking mode need `Required: true`, and
+MiniMax needs `sdk.ReasoningReplayDetails`. A model's `Reasoning.Replay` can be
+passed as is.
 
 OpenAI's defaults enable native developer and mid-conversation system roles.
 Use `WithMessageRoleCapabilities` to disable either role for a compatible
@@ -1231,8 +1277,9 @@ is returned in the `reasoning_details` field instead of inline `<think>` tags)
 and maps reasoning effort onto MiniMax's `thinking` toggle —
 `WithReasoningEffort("none")` sends `thinking: {type: "disabled"}`, any other
 effort sends `thinking: {type: "adaptive"}`, and `reasoning_effort` is omitted.
-The provider reads `reasoning_details` as reasoning text and preserves it in
-assistant history for later tool-call turns.
+The provider reads `reasoning_details` as reasoning text and preserves the
+array on the step's `ReasoningPart`; it is sent back when the replay field is
+`sdk.ReasoningReplayDetails`.
 
 #### Methods
 

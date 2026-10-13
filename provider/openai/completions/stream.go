@@ -43,7 +43,7 @@ func (sp *streamProcessor) send(part sdk.StreamPart) bool {
 
 func (sp *streamProcessor) endReasoning(id string) {
 	if sp.reasoningStartSent {
-		sp.send(&sdk.ReasoningEndPart{ID: id, Format: sdk.ReasoningFormatOpenAIChat, Model: sp.chunkModel, ProviderMetadata: minimaxReasoningMetadata(sp.reasoningDetails)})
+		sp.send(&sdk.ReasoningEndPart{ID: id, Format: sdk.ReasoningFormatOpenAIChat, Model: sp.chunkModel, ProviderMetadata: reasoningDetailsMetadata(sp.reasoningDetails)})
 		sp.reasoningStartSent = false
 	}
 }
@@ -111,12 +111,21 @@ func (sp *streamProcessor) processChunk(chunk *chatChunkResponse) error {
 
 func (sp *streamProcessor) processReasoning(delta *chatChunkDelta, chunkID string) {
 	reasoningContent := reasoningFromDelta(delta)
-	if reasoningContent != "" && len(delta.ReasoningDetails) > 0 {
-		// Builder.String() is a zero-copy view, so the per-delta reads below
-		// stay O(1) while appends stay amortized O(1).
-		reasoningContent = trimReasoningPrefix(reasoningContent, sp.reasoningText.String())
-		sp.reasoningText.WriteString(reasoningContent)
-		sp.reasoningDetails = reasoningDetailsWithText(delta.ReasoningDetails, sp.reasoningText.String())
+	if len(delta.ReasoningDetails) > 0 {
+		// Details are kept whatever they carry: an encrypted entry has no text
+		// but is what the endpoint needs back to continue the reasoning.
+		sp.reasoningDetails = mergeReasoningDetails(sp.reasoningDetails, delta.ReasoningDetails)
+		if reasoningContent != "" {
+			// Builder.String() is a zero-copy view, so the per-delta reads below
+			// stay O(1) while appends stay amortized O(1).
+			reasoningContent = trimReasoningPrefix(reasoningContent, sp.reasoningText.String())
+			sp.reasoningText.WriteString(reasoningContent)
+		}
+		if reasoningContent == "" && !sp.reasoningBlockSeen {
+			// A detail without text still opens the block, so the details reach
+			// the block's end metadata.
+			sp.startReasoning(chunkID)
+		}
 	}
 	if reasoningContent == "" {
 		// A delta that carries reasoning_content as "" (not null) announces a
@@ -153,13 +162,49 @@ func trimReasoningPrefix(text, previous string) string {
 	return text
 }
 
-func reasoningDetailsWithText(details []chatReasoningDetail, text string) []chatReasoningDetail {
-	if len(details) == 0 {
-		return nil
+// mergeReasoningDetails folds one delta's reasoning_details into the entries
+// accumulated so far. Streamed entries are keyed by index: text and summary
+// arrive in pieces and are concatenated (a piece that repeats the accumulated
+// text is cumulative and replaces it), while signature, data and every other
+// field are set by whichever piece carries them. An entry without an index is
+// keyed by its position in the delta. The merged entries keep every field they
+// arrived with, index included, since OpenRouter requires the replayed sequence
+// to match what the model produced.
+func mergeReasoningDetails(acc, delta []chatReasoningDetail) []chatReasoningDetail {
+	for position, detail := range delta {
+		key := position
+		if index, ok := detail["index"].(float64); ok {
+			key = int(index)
+		}
+		target := -1
+		for i, existing := range acc {
+			existingKey := i
+			if index, ok := existing["index"].(float64); ok {
+				existingKey = int(index)
+			}
+			if existingKey == key {
+				target = i
+				break
+			}
+		}
+		if target < 0 {
+			acc = append(acc, copyReasoningDetail(detail))
+			continue
+		}
+		for field, value := range detail {
+			piece, isString := value.(string)
+			switch {
+			case isString && (field == "text" || field == "summary"):
+				previous, _ := acc[target][field].(string)
+				acc[target][field] = previous + trimReasoningPrefix(piece, previous)
+			case isString && piece == "":
+				// An empty piece does not clear a value set earlier.
+			default:
+				acc[target][field] = value
+			}
+		}
 	}
-	out := copyReasoningDetails(details)
-	out[len(out)-1]["text"] = text
-	return out
+	return acc
 }
 
 func (sp *streamProcessor) processContent(delta *chatChunkDelta, chunkID string) {

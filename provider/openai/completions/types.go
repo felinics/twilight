@@ -54,6 +54,7 @@ type chatMessage struct {
 	// "" instead of being dropped: DeepSeek and Kimi thinking modes validate
 	// the key's presence on replayed tool-call messages, not its length.
 	ReasoningContent *string               `json:"reasoning_content,omitempty"`
+	Reasoning        *string               `json:"reasoning,omitempty"`
 	ReasoningDetails []chatReasoningDetail `json:"reasoning_details,omitempty"`
 	ToolCalls        []chatToolCall        `json:"tool_calls,omitempty"`
 	ToolCallID       string                `json:"tool_call_id,omitempty"`

@@ -102,9 +102,18 @@ func TestDoGenerate_ThinkingReplayPadding(t *testing.T) {
 		wantStep2 *string
 	}{
 		{
-			name:      "deepseek compat pads bare tool calls",
-			options:   []completions.Option{completions.WithDeepSeekChatCompletionsCompat()},
+			name: "required replay pads bare tool calls",
+			options: []completions.Option{
+				completions.WithDeepSeekChatCompletionsCompat(),
+				completions.WithReasoningReplay(sdk.ReasoningReplay{Required: true}),
+			},
 			wantStep1: empty, wantStep2: empty,
+		},
+		{
+			// The compat options no longer imply a replay policy: the caller
+			// sets it with WithReasoningReplay.
+			name:    "deepseek compat alone does not pad",
+			options: []completions.Option{completions.WithDeepSeekChatCompletionsCompat()},
 		},
 		{
 			name:      "plain endpoint pads once the conversation carries reasoning_content",
@@ -115,8 +124,12 @@ func TestDoGenerate_ThinkingReplayPadding(t *testing.T) {
 			name: "plain endpoint sends nothing without thinking evidence",
 		},
 		{
-			name:    "minimax compat never pads",
-			options: []completions.Option{completions.WithMiniMaxChatCompletionsCompat()},
+			// reasoning_details is an array; there is no empty value to pad.
+			name: "details replay never pads",
+			options: []completions.Option{
+				completions.WithMiniMaxChatCompletionsCompat(),
+				completions.WithReasoningReplay(sdk.ReasoningReplay{Field: sdk.ReasoningReplayDetails, Required: true}),
+			},
 		},
 	}
 
