@@ -11,7 +11,6 @@ import (
 	"github.com/felinics/twilight/internal/errorformat"
 	"github.com/felinics/twilight/internal/messagecompat"
 	"github.com/felinics/twilight/internal/utils"
-	"github.com/felinics/twilight/provider/openai/internal/modeldiscovery"
 	"github.com/felinics/twilight/sdk"
 )
 
@@ -159,11 +158,7 @@ func (p *Provider) ListModels(ctx context.Context) ([]sdk.Model, error) {
 	}
 
 	models := make([]sdk.Model, 0, len(resp.Data))
-	for i := range resp.Data {
-		m := &resp.Data[i]
-		if !modeldiscovery.IsCandidate(m, modeldiscovery.ChatCompletions) {
-			continue
-		}
+	for _, m := range resp.Data {
 		models = append(models, sdk.Model{
 			ID:       m.ID,
 			Provider: p,

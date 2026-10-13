@@ -1,7 +1,5 @@
 package completions
 
-import "github.com/felinics/twilight/provider/openai/internal/modeldiscovery"
-
 // --- Request types ---
 
 type chatRequest struct {
@@ -198,7 +196,12 @@ type chatFunctionDelta struct {
 // --- Models API response types ---
 
 type modelsListResponse struct {
-	Data []modeldiscovery.Model `json:"data"`
+	Data []modelObject `json:"data"`
 }
 
-type modelObject = modeldiscovery.Model
+type modelObject struct {
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	Created int64  `json:"created"`
+	OwnedBy string `json:"owned_by"`
+}

@@ -1318,8 +1318,8 @@ func TestListModels(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"models": []map[string]any{
-				{"name": "models/gemini-2.5-pro", "displayName": "Gemini 2.5 Pro", "supportedGenerationMethods": []string{"generateContent"}},
-				{"name": "models/gemini-2.5-flash", "displayName": "Gemini 2.5 Flash", "supportedGenerationMethods": []string{"generateContent", "countTokens"}},
+				{"name": "models/gemini-2.5-pro", "displayName": "Gemini 2.5 Pro"},
+				{"name": "models/gemini-2.5-flash", "displayName": "Gemini 2.5 Flash"},
 			},
 		})
 	}))
@@ -1345,7 +1345,8 @@ func TestListModels(t *testing.T) {
 	}
 }
 
-func TestListModels_OnlyGenerateContentModels(t *testing.T) {
+// Embedding-only models are listed by the embedding provider, not here.
+func TestListModels_LeavesOutEmbeddingModels(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
@@ -1353,22 +1354,12 @@ func TestListModels_OnlyGenerateContentModels(t *testing.T) {
 				{
 					"name":                       "models/gemini-2.5-flash",
 					"displayName":                "Gemini 2.5 Flash",
-					"supportedGenerationMethods": []string{"generateContent", "embedContent", "countTokens"},
+					"supportedGenerationMethods": []string{"generateContent", "countTokens"},
 				},
 				{
 					"name":                       "models/gemini-embedding-001",
+					"displayName":                "Gemini Embedding 001",
 					"supportedGenerationMethods": []string{"embedContent", "countTokens"},
-				},
-				{
-					"name":                       "models/aqa",
-					"supportedGenerationMethods": []string{"generateAnswer"},
-				},
-				{
-					"name":                       "models/token-counter",
-					"supportedGenerationMethods": []string{"countTokens"},
-				},
-				{
-					"name": "models/no-methods",
 				},
 			},
 		})

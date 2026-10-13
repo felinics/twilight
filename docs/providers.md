@@ -206,17 +206,6 @@ model := provider.ChatModel("gpt-4o-mini")
 | `Test` | `GET /models?limit=1` |
 | `TestModel` | `GET /models/{id}` |
 
-`ListModels` removes known embedding, transcription, speech, image, video,
-moderation, Realtime, legacy Completions-only, and Responses-only model families.
-On compatible APIs an explicit `capabilities.chat_completion` (including
-Mistral's `capabilities.completion_chat` alias) takes precedence. Otherwise, a
-valid `supported_endpoints` list is authoritative: a missing target endpoint or
-an empty list excludes the model, while a missing or malformed extension remains
-unknown. The fallback also rejects an explicit non-text output modality. Unknown
-IDs remain visible because OpenAI's standard model object has no
-endpoint-capability field; listing is therefore a conservative candidate set,
-not proof that every model accepts Chat Completions.
-
 ### OpenAI-Compatible Providers
 
 Any service that implements the OpenAI Chat Completions API works out of the box.
@@ -432,15 +421,6 @@ their native roles and positions.
 | `ListModels` | `GET /models` |
 | `Test` | `GET /models?limit=1` |
 | `TestModel` | `GET /models/{id}` |
-
-`ListModels` applies the same conservative non-text-model exclusions as the
-Completions provider, but evaluates only Responses-specific capability data. It
-does not infer Responses support from `chat_completion` or `completion_chat`.
-A valid empty `supported_endpoints` list explicitly excludes a model; missing or
-malformed capability metadata remains unknown. Unknown IDs remain visible when
-the standard model object supplies no usable capability metadata, so callers
-should treat the result as candidates rather than confirmed endpoint
-compatibility.
 
 ### Using with OpenRouter
 
@@ -1029,10 +1009,6 @@ Thought signatures are kept per block, including on parts that carry a signature
 | `ListModels` | `GET /v1beta/models` |
 | `Test` | `GET /v1beta/models?pageSize=1` |
 | `TestModel` | `GET /v1beta/models/{id}` |
-
-`ListModels` returns only entries whose `supportedGenerationMethods` explicitly
-contains `generateContent`; embedding-only, `generateAnswer`-only, and other
-models are omitted from the chat model list.
 
 ---
 

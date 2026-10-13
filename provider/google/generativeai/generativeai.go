@@ -153,11 +153,11 @@ func (p *Provider) ListModels(ctx context.Context) ([]sdk.Model, error) {
 		return nil, fmt.Errorf("google: list models request failed: %w", err)
 	}
 
-	// sdk.Model represents a chat model, so only expose models that can be
-	// called through this provider's generateContent endpoint.
+	// The list also holds embedding models; those are listed by the
+	// embedding provider and left out here.
 	models := make([]sdk.Model, 0, len(resp.Models))
 	for _, m := range resp.Models {
-		if !supportsGenerateContent(m.SupportedGenerationMethods) {
+		if embeddingOnly(m.SupportedGenerationMethods) {
 			continue
 		}
 		models = append(models, sdk.Model{
@@ -229,13 +229,19 @@ func (p *Provider) ChatModel(id string) *sdk.Model {
 	}
 }
 
-func supportsGenerateContent(methods []string) bool {
-	for _, method := range methods {
-		if method == "generateContent" {
-			return true
+// embeddingOnly reports a model that embeds but cannot generate content.
+func embeddingOnly(methods []string) bool {
+	hasGenerate := false
+	hasEmbed := false
+	for _, m := range methods {
+		switch m {
+		case "generateContent":
+			hasGenerate = true
+		case "embedContent":
+			hasEmbed = true
 		}
 	}
-	return false
+	return hasEmbed && !hasGenerate
 }
 
 // ---------- DoGenerate ----------

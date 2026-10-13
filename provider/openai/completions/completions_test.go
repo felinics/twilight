@@ -1301,19 +1301,7 @@ func TestListModels(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"data": []map[string]any{
 				{"id": "gpt-4o", "object": "model", "owned_by": "openai"},
-				{"id": "o3-mini", "object": "model", "owned_by": "openai"},
-				{"id": "future-chat-model", "object": "model", "owned_by": "other"},
-				{"id": "capability-chat-model", "capabilities": map[string]any{"chat_completion": "true"}},
-				{"id": "responses-only-model", "capabilities": map[string]any{"chat_completion": false, "responses": true}},
-				{"id": "image-output-model", "architecture": map[string]any{"output_modalities": []string{"image"}}},
-				{"id": "text-embedding-3-small"},
-				{"id": "whisper-1"},
-				{"id": "tts-1"},
-				{"id": "gpt-4o-mini-tts"},
-				{"id": "dall-e-3"},
-				{"id": "gpt-image-1"},
-				{"id": "omni-moderation-latest"},
-				{"id": "computer-use-preview"},
+				{"id": "gpt-4o-mini", "object": "model", "owned_by": "openai"},
 			},
 		})
 	}))
@@ -1328,14 +1316,14 @@ func TestListModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListModels failed: %v", err)
 	}
-	want := []string{"gpt-4o", "o3-mini", "future-chat-model", "capability-chat-model"}
-	if len(models) != len(want) {
-		t.Fatalf("model count: got %d (%+v), want %d", len(models), models, len(want))
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(models))
 	}
-	for i, id := range want {
-		if models[i].ID != id {
-			t.Errorf("model %d: got %q, want %q", i, models[i].ID, id)
-		}
+	if models[0].ID != "gpt-4o" {
+		t.Errorf("expected first model 'gpt-4o', got %q", models[0].ID)
+	}
+	if models[1].ID != "gpt-4o-mini" {
+		t.Errorf("expected second model 'gpt-4o-mini', got %q", models[1].ID)
 	}
 }
 
