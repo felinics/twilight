@@ -444,7 +444,9 @@ func convertAssistantMessage(msg sdk.Message) chatMessage {
 			}
 			reasoning += p.Text
 			hasReasoning = true
-			reasoningDetails = append(reasoningDetails, extractReasoningDetails(p.ProviderMetadata)...)
+			if details := extractMiniMaxReasoningDetails(p.ProviderMetadata); len(details) > 0 {
+				reasoningDetails = details
+			}
 		default:
 			contentParts = append(contentParts, part)
 		}
@@ -536,7 +538,7 @@ func (p *Provider) parseResponse(resp *chatResponse) (sdk.ModelResult, error) {
 				Text:             result.Reasoning,
 				Format:           sdk.ReasoningFormatOpenAIChat,
 				Model:            resp.Model,
-				ProviderMetadata: reasoningDetailsMetadata(choice.Message.ReasoningDetails),
+				ProviderMetadata: minimaxReasoningMetadata(choice.Message.ReasoningDetails),
 			}}
 		}
 		result.FinishReason = mapFinishReason(choice.FinishReason)
@@ -693,28 +695,18 @@ func reasoningFromDelta(d *chatChunkDelta) string {
 	return d.Reasoning
 }
 
-// reasoningTextFromDetails returns the readable text of the last item that
-// has any: reasoning.text items carry text, reasoning.summary items carry
-// summary, and reasoning.encrypted items carry none.
 func reasoningTextFromDetails(details []chatReasoningDetail) string {
 	for i := len(details) - 1; i >= 0; i-- {
 		if text, _ := details[i]["text"].(string); text != "" {
 			return text
 		}
-		if summary, _ := details[i]["summary"].(string); summary != "" {
-			return summary
-		}
 	}
 	return ""
 }
 
-// reasoningDetailsMetadata carries the endpoint's reasoning_details on the
-// part as their JSON encoding: every item, text, summary, encrypted data and
-// signatures alike, which the replay puts back on the wire unchanged. MiniMax
-// and OpenRouter both read them back; OpenRouter turns them into the
-// provider's own blocks (Gemini's thought signatures, Anthropic's signed
-// thinking, OpenAI's encrypted reasoning).
-func reasoningDetailsMetadata(details []chatReasoningDetail) sdk.ProviderMetadata {
+// minimaxReasoningMetadata carries MiniMax's reasoning_details on the part as
+// their JSON encoding, the opaque token the replay puts back on the wire.
+func minimaxReasoningMetadata(details []chatReasoningDetail) sdk.ProviderMetadata {
 	if len(details) == 0 {
 		return nil
 	}
@@ -722,16 +714,11 @@ func reasoningDetailsMetadata(details []chatReasoningDetail) sdk.ProviderMetadat
 	if err != nil {
 		return nil
 	}
-	return sdk.NewProviderMetadata(metadataNamespace, map[string]string{metadataKeyReasoningDetails: string(raw)})
+	return sdk.NewProviderMetadata(minimaxNamespace, map[string]string{minimaxKeyReasoningDetails: string(raw)})
 }
 
-// extractReasoningDetails reads the preserved reasoning_details. Parts stored
-// before the namespace became provider-neutral carry them under "minimax".
-func extractReasoningDetails(meta sdk.ProviderMetadata) []chatReasoningDetail {
-	raw := meta.Get(metadataNamespace, metadataKeyReasoningDetails)
-	if raw == "" {
-		raw = meta.Get(legacyMiniMaxNamespace, metadataKeyReasoningDetails)
-	}
+func extractMiniMaxReasoningDetails(meta sdk.ProviderMetadata) []chatReasoningDetail {
+	raw := meta.Get(minimaxNamespace, minimaxKeyReasoningDetails)
 	if raw == "" {
 		return nil
 	}
@@ -742,13 +729,18 @@ func extractReasoningDetails(meta sdk.ProviderMetadata) []chatReasoningDetail {
 	return details
 }
 
-// The namespace matches upstream twilight's, so parts stored now still replay
-// after the move to it.
 const (
-	metadataNamespace           = "openai-chat"
-	legacyMiniMaxNamespace      = "minimax"
-	metadataKeyReasoningDetails = "reasoning_details"
+	minimaxNamespace           = "minimax"
+	minimaxKeyReasoningDetails = "reasoning_details"
 )
+
+func copyReasoningDetails(details []chatReasoningDetail) []chatReasoningDetail {
+	out := make([]chatReasoningDetail, 0, len(details))
+	for _, detail := range details {
+		out = append(out, copyReasoningDetail(detail))
+	}
+	return out
+}
 
 func copyReasoningDetail(detail map[string]any) chatReasoningDetail {
 	out := make(chatReasoningDetail, len(detail))

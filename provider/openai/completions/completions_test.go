@@ -1715,9 +1715,9 @@ func TestDoStream_MiniMaxReasoningDetails(t *testing.T) {
 
 func minimaxReasoningDetailsFromTestMetadata(t *testing.T, meta sdk.ProviderMetadata) []map[string]any {
 	t.Helper()
-	raw := meta.Get("openai-chat", "reasoning_details")
+	raw := meta.Get("minimax", "reasoning_details")
 	if raw == "" {
-		t.Fatalf("expected reasoning_details metadata, got %#v", meta)
+		t.Fatalf("expected minimax metadata, got %#v", meta)
 	}
 	var details []map[string]any
 	if err := json.Unmarshal([]byte(raw), &details); err != nil {
