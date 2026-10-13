@@ -295,6 +295,13 @@ Reasoning is read from `reasoning_details` and preserved in assistant history, s
 MiniMax otherwise uses the generic Chat Completions path with minimal special
 handling.
 
+OpenRouter's Chat Completions endpoint returns `reasoning_details` as well. Every
+item is kept on the reasoning part, under the `openai-chat` provider metadata
+namespace, and replayed unchanged: the readable text or summary together with
+the opaque items, such as Gemini's thought signatures (`reasoning.encrypted`),
+Anthropic's signed thinking (`signature` on `reasoning.text`) and OpenAI's
+encrypted reasoning. Streamed pieces are merged by type and index.
+
 Other OpenAI-compatible services use `completions.New()` with a base URL:
 
 ```go

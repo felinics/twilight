@@ -16,8 +16,8 @@ package completions
 // some message in the request already carries reasoning_content: the endpoint
 // then demonstrably accepts the field, so an empty one is safe. Plain OpenAI
 // rejects unknown message fields, so nothing is added otherwise. Messages that
-// carry reasoning_details (MiniMax) already replay their reasoning and are left
-// alone, as is the whole request in MiniMax compat.
+// carry reasoning_details (MiniMax, OpenRouter) already replay their reasoning
+// and are left alone, as is the whole request in MiniMax compat.
 func padThinkingReplay(messages []chatMessage, compat chatCompletionsCompat) {
 	if compat == chatCompletionsCompatMiniMax {
 		return

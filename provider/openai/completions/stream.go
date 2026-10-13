@@ -43,7 +43,7 @@ func (sp *streamProcessor) send(part sdk.StreamPart) bool {
 
 func (sp *streamProcessor) endReasoning(id string) {
 	if sp.reasoningStartSent {
-		sp.send(&sdk.ReasoningEndPart{ID: id, Format: sdk.ReasoningFormatOpenAIChat, Model: sp.chunkModel, ProviderMetadata: minimaxReasoningMetadata(sp.reasoningDetails)})
+		sp.send(&sdk.ReasoningEndPart{ID: id, Format: sdk.ReasoningFormatOpenAIChat, Model: sp.chunkModel, ProviderMetadata: reasoningDetailsMetadata(sp.reasoningDetails)})
 		sp.reasoningStartSent = false
 	}
 }
@@ -111,12 +111,21 @@ func (sp *streamProcessor) processChunk(chunk *chatChunkResponse) error {
 
 func (sp *streamProcessor) processReasoning(delta *chatChunkDelta, chunkID string) {
 	reasoningContent := reasoningFromDelta(delta)
-	if reasoningContent != "" && len(delta.ReasoningDetails) > 0 {
-		// Builder.String() is a zero-copy view, so the per-delta reads below
-		// stay O(1) while appends stay amortized O(1).
-		reasoningContent = trimReasoningPrefix(reasoningContent, sp.reasoningText.String())
-		sp.reasoningText.WriteString(reasoningContent)
-		sp.reasoningDetails = reasoningDetailsWithText(delta.ReasoningDetails, sp.reasoningText.String())
+	if len(delta.ReasoningDetails) > 0 {
+		// Every item is kept, text or not: an encrypted item or a signature
+		// carries no text but is what the endpoint needs back to continue the
+		// reasoning. Such a piece can arrive after the text or the tool call
+		// has closed the block (Gemini's thought signature does), so it opens
+		// the block again, under the same ID, for the block's end to carry the
+		// details.
+		sp.reasoningDetails = mergeReasoningDetails(sp.reasoningDetails, delta.ReasoningDetails)
+		sp.startReasoning(chunkID)
+		if reasoningContent != "" {
+			// Builder.String() is a zero-copy view, so the per-delta reads below
+			// stay O(1) while appends stay amortized O(1).
+			reasoningContent = trimReasoningPrefix(reasoningContent, sp.reasoningText.String())
+			sp.reasoningText.WriteString(reasoningContent)
+		}
 	}
 	if reasoningContent == "" {
 		// A delta that carries reasoning_content as "" (not null) announces a
@@ -153,13 +162,67 @@ func trimReasoningPrefix(text, previous string) string {
 	return text
 }
 
-func reasoningDetailsWithText(details []chatReasoningDetail, text string) []chatReasoningDetail {
-	if len(details) == 0 {
-		return nil
+// mergeReasoningDetails folds one delta's reasoning_details into the items
+// accumulated so far. OpenRouter streams an item in pieces that share its type
+// and index: text and summary are concatenated (a piece that repeats the
+// accumulated text is cumulative and replaces it), while signature, data, id
+// and every other field are set by whichever piece carries them, and an empty
+// or null value never clears one. Items keep every field they arrived with,
+// index included, in the order they first appeared, since OpenRouter requires
+// the replayed sequence to match what the model produced.
+func mergeReasoningDetails(acc, delta []chatReasoningDetail) []chatReasoningDetail {
+	for _, piece := range delta {
+		i := matchReasoningDetail(acc, piece)
+		if i < 0 {
+			acc = append(acc, copyReasoningDetail(piece))
+			continue
+		}
+		for field, value := range piece {
+			s, isString := value.(string)
+			switch {
+			case value == nil || isString && s == "":
+			case field == "text" || field == "summary":
+				previous, _ := acc[i][field].(string)
+				acc[i][field] = previous + trimReasoningPrefix(s, previous)
+			default:
+				acc[i][field] = value
+			}
+		}
 	}
-	out := copyReasoningDetails(details)
-	out[len(out)-1]["text"] = text
-	return out
+	return acc
+}
+
+// matchReasoningDetail finds the item a piece belongs to: the one with the
+// same type and index. The type is part of the key because providers number
+// items differently: Gemini's encrypted item shares index 0 with its text
+// item, while GPT's sits at index 1 after the summary. A piece without an
+// index joins the last item when that item has the same type and no index
+// either. Pieces whose ids differ never join.
+func matchReasoningDetail(acc []chatReasoningDetail, piece chatReasoningDetail) int {
+	pieceType := detailString(piece, "type")
+	index, indexed := piece["index"].(float64)
+	for i := len(acc) - 1; i >= 0; i-- {
+		item := acc[i]
+		itemIndex, itemIndexed := item["index"].(float64)
+		sameItem := detailString(item, "type") == pieceType && itemIndexed == indexed && itemIndex == index && !conflictingIDs(item, piece)
+		if sameItem {
+			return i
+		}
+		if !indexed {
+			break
+		}
+	}
+	return -1
+}
+
+func conflictingIDs(a, b chatReasoningDetail) bool {
+	idA, idB := detailString(a, "id"), detailString(b, "id")
+	return idA != "" && idB != "" && idA != idB
+}
+
+func detailString(detail chatReasoningDetail, field string) string {
+	s, _ := detail[field].(string)
+	return s
 }
 
 func (sp *streamProcessor) processContent(delta *chatChunkDelta, chunkID string) {
