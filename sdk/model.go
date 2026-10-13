@@ -2,18 +2,12 @@ package sdk
 
 import "context"
 
-type ModelType string
-
-const (
-	ModelTypeChat      ModelType = "chat"
-	ModelTypeEmbedding ModelType = "embedding"
-)
-
+// Model is a chat model served by a provider; embedding models are
+// EmbeddingModel.
 type Model struct {
 	ID          string
 	DisplayName string
 	Provider    Provider
-	Type        ModelType
 }
 
 // Test checks whether this model is supported by its provider.

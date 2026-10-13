@@ -104,17 +104,11 @@ func ClassifyProbe(err error) (*ModelTestResult, error)
 ### Models
 
 ```go
-type ModelType string
-
-const ModelTypeChat      ModelType = "chat"
-const ModelTypeEmbedding ModelType = "embedding"
-
+// Model is a chat model; embedding models are EmbeddingModel.
 type Model struct {
     ID          string
     DisplayName string
     Provider    Provider
-    Type        ModelType
-    MaxTokens   int
 }
 
 func (m *Model) Test(ctx context.Context) (*ModelTestResult, error)
@@ -561,9 +555,15 @@ type EmbeddingProvider interface {
 }
 
 type EmbeddingModel struct {
-    ID                   string
-    Provider             EmbeddingProvider
-    MaxEmbeddingsPerCall int
+    ID          string
+    DisplayName string
+    Provider    EmbeddingProvider
+
+    // Optional metadata; a zero value means not stated.
+    Description          string
+    Dimensions           int // default output vector size
+    MaxInputTokens       int // per input value
+    MaxEmbeddingsPerCall int // values per request
 }
 
 type EmbedParams struct {

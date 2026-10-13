@@ -113,14 +113,10 @@ type Model struct {
     ID          string
     DisplayName string
     Provider    Provider
-    Type        ModelType
-    MaxTokens   int
 }
-
-type ModelType string
-const ModelTypeChat      ModelType = "chat"
-const ModelTypeEmbedding ModelType = "embedding"
 ```
+
+`Model` is a chat model; embedding models are `EmbeddingModel`.
 
 #### Methods
 
@@ -774,13 +770,20 @@ The interface that embedding backends must implement.
 
 ```go
 type EmbeddingModel struct {
-    ID                   string
-    Provider             EmbeddingProvider
-    MaxEmbeddingsPerCall int
+    ID          string
+    DisplayName string
+    Provider    EmbeddingProvider
+
+    // Optional metadata; a zero value means not stated.
+    Description          string
+    Dimensions           int // default output vector size
+    MaxInputTokens       int // per input value
+    MaxEmbeddingsPerCall int // values per request
 }
 ```
 
-Represents an embedding model bound to an `EmbeddingProvider`. `MaxEmbeddingsPerCall` indicates the maximum number of input values per single API call (typically 2048).
+Represents an embedding model bound to an `EmbeddingProvider`, separate from the
+chat `Model`. The fields after `Provider` are optional metadata. `MaxEmbeddingsPerCall` indicates the maximum number of input values per single API call (typically 2048).
 
 #### EmbedParams
 

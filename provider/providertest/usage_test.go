@@ -133,7 +133,7 @@ func TestInputUsageContract(t *testing.T) {
 					defer srv.Close()
 					ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 					defer cancel()
-					model := &sdk.Model{ID: "test-model", Provider: p.new(srv.URL), Type: sdk.ModelTypeChat}
+					model := &sdk.Model{ID: "test-model", Provider: p.new(srv.URL)}
 					req := sdk.Request{Messages: []sdk.Message{sdk.UserMessage("hi")}}
 					if !stream {
 						result, err := model.Generate(ctx, req)

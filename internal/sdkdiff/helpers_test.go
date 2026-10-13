@@ -51,7 +51,7 @@ func chatRequest(model string) sdk.Request {
 // twilightGenerate returns the *sdk.APIError of a Generate call.
 func twilightGenerate(t *testing.T, p sdk.Provider, model string) *sdk.APIError {
 	t.Helper()
-	m := &sdk.Model{ID: model, Provider: p, Type: sdk.ModelTypeChat}
+	m := &sdk.Model{ID: model, Provider: p}
 	_, err := m.Generate(context.Background(), chatRequest(model))
 	return asAPIError(t, err)
 }
@@ -59,7 +59,7 @@ func twilightGenerate(t *testing.T, p sdk.Provider, model string) *sdk.APIError 
 // twilightStream returns the *sdk.APIError of a Stream call's ErrorPart.
 func twilightStream(t *testing.T, p sdk.Provider, model string) *sdk.APIError {
 	t.Helper()
-	m := &sdk.Model{ID: model, Provider: p, Type: sdk.ModelTypeChat}
+	m := &sdk.Model{ID: model, Provider: p}
 	stream, err := m.Stream(context.Background(), chatRequest(model))
 	if err != nil {
 		return asAPIError(t, err)

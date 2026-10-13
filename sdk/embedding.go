@@ -7,10 +7,21 @@ type EmbeddingProvider interface {
 	DoEmbed(ctx context.Context, params EmbedParams) (*EmbedResult, error)
 }
 
-// EmbeddingModel represents an embedding model bound to an EmbeddingProvider.
+// EmbeddingModel is an embedding model served by a provider; chat models are
+// Model. ID and Provider identify it, and Embed and EmbedMany call it through
+// WithEmbeddingModel. The remaining fields describe it; they are optional, and
+// a zero value means not stated.
 type EmbeddingModel struct {
-	ID                   string
-	Provider             EmbeddingProvider
+	ID          string
+	DisplayName string
+	Provider    EmbeddingProvider
+
+	Description string
+	// Dimensions is the size of the vectors the model returns by default.
+	Dimensions int
+	// MaxInputTokens is the most tokens one input value can hold.
+	MaxInputTokens int
+	// MaxEmbeddingsPerCall is the most values one request can embed.
 	MaxEmbeddingsPerCall int
 }
 

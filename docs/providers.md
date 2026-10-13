@@ -42,8 +42,6 @@ type Model struct {
     ID          string
     DisplayName string
     Provider    Provider
-    Type        ModelType   // "chat"
-    MaxTokens   int
 }
 ```
 
@@ -1672,7 +1670,7 @@ func (p *MyProvider) Name() string {
 func (p *MyProvider) ListModels(ctx context.Context) ([]sdk.Model, error) {
     // Fetch models from your backend's API
     return []sdk.Model{
-        {ID: "my-model-v1", Provider: p, Type: sdk.ModelTypeChat},
+        {ID: "my-model-v1", Provider: p},
     }, nil
 }
 
@@ -1698,7 +1696,7 @@ func (p *MyProvider) TestModel(ctx context.Context, modelID string) (*sdk.ModelT
 }
 
 func (p *MyProvider) ChatModel(id string) *sdk.Model {
-    return &sdk.Model{ID: id, Provider: p, Type: sdk.ModelTypeChat}
+    return &sdk.Model{ID: id, Provider: p}
 }
 
 func (p *MyProvider) DoGenerate(ctx context.Context, req sdk.Request) (sdk.ModelResult, error) {

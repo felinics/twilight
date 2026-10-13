@@ -35,3 +35,17 @@ type batchEmbedContentsResponse struct {
 type embeddingValues struct {
 	Values []float64 `json:"values"`
 }
+
+// --- Models API response types ---
+
+type modelsListResponse struct {
+	Models []modelObject `json:"models"`
+}
+
+type modelObject struct {
+	Name                       string   `json:"name"`
+	DisplayName                string   `json:"displayName"`
+	Description                string   `json:"description"`
+	InputTokenLimit            int      `json:"inputTokenLimit"`
+	SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
+}

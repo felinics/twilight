@@ -9,7 +9,7 @@ Twilight AI provides a unified embedding API with provider implementations for *
 | Concept | Description |
 |---------|-------------|
 | `EmbeddingProvider` | Interface that embedding backends implement |
-| `EmbeddingModel` | A model bound to a provider, created via `provider.EmbeddingModel(id)` |
+| `EmbeddingModel` | An embedding model bound to a provider, created via `provider.EmbeddingModel(id)`. It is separate from the chat `Model` and carries optional metadata: display name, description, default `Dimensions`, `MaxInputTokens` and `MaxEmbeddingsPerCall` |
 | `Embed` | Generate a single embedding vector |
 | `EmbedMany` | Generate embeddings for multiple inputs in one call |
 
@@ -196,6 +196,14 @@ provider := embedding.New(
 |-------|-------------|
 | `gemini-embedding-001` | Latest Gemini embedding model |
 | `text-embedding-004` | Text embedding model |
+
+`ListModels` lists the models that support `embedContent`, with display name,
+description and `MaxInputTokens` filled in. The chat provider's `ListModels`
+leaves these models out.
+
+```go
+models, err := provider.ListModels(ctx) // []sdk.EmbeddingModel
+```
 
 ### API Routing
 

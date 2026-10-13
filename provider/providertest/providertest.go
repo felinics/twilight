@@ -133,7 +133,7 @@ const (
 )
 
 func (f Fixture) model(p sdk.Provider) *sdk.Model {
-	return &sdk.Model{ID: f.ModelID, Provider: p, Type: sdk.ModelTypeChat}
+	return &sdk.Model{ID: f.ModelID, Provider: p}
 }
 
 func request() sdk.Request {

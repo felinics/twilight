@@ -318,3 +318,47 @@ func TestClientEmbedMany(t *testing.T) {
 		t.Errorf("expected 2 embeddings, got %d", len(result.Embeddings))
 	}
 }
+
+// ---------- ListModels ----------
+
+func TestListModels(t *testing.T) {
+	_, p := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/models" {
+			t.Errorf("request: got %s %s, want GET /models", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"models": []map[string]any{
+				{
+					"name":                       "models/gemini-2.5-flash",
+					"supportedGenerationMethods": []string{"generateContent"},
+				},
+				{
+					"name":                       "models/gemini-embedding-001",
+					"displayName":                "Gemini Embedding 001",
+					"description":                "Text embeddings",
+					"inputTokenLimit":            2048,
+					"supportedGenerationMethods": []string{"embedContent", "countTokens"},
+				},
+			},
+		})
+	})
+
+	models, err := p.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("models: got %d, want the embedding model only", len(models))
+	}
+	m := models[0]
+	if m.ID != "gemini-embedding-001" || m.DisplayName != "Gemini Embedding 001" || m.Description != "Text embeddings" {
+		t.Errorf("model: %+v", m)
+	}
+	if m.MaxInputTokens != 2048 || m.MaxEmbeddingsPerCall != 2048 {
+		t.Errorf("limits: input %d, per call %d", m.MaxInputTokens, m.MaxEmbeddingsPerCall)
+	}
+	if m.Provider != p {
+		t.Error("a listed model must be bound to the provider")
+	}
+}

@@ -98,7 +98,7 @@ func New(options ...Option) *Provider {
 func (p *Provider) Name() string { return "opencode-go" }
 
 func (p *Provider) ChatModel(id string) *sdk.Model {
-	return &sdk.Model{ID: id, Provider: p, Type: sdk.ModelTypeChat}
+	return &sdk.Model{ID: id, Provider: p}
 }
 
 // ProtocolForModel exposes the same routing decision used by generation and

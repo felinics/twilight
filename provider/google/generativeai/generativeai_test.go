@@ -1343,12 +1343,10 @@ func TestListModels(t *testing.T) {
 	if models[0].DisplayName != "Gemini 2.5 Pro" {
 		t.Errorf("expected display name 'Gemini 2.5 Pro', got %q", models[0].DisplayName)
 	}
-	if models[0].Type != sdk.ModelTypeChat {
-		t.Errorf("expected chat type for model without supportedGenerationMethods, got %q", models[0].Type)
-	}
 }
 
-func TestListModels_EmbeddingType(t *testing.T) {
+// Embedding-only models are listed by the embedding provider, not here.
+func TestListModels_LeavesOutEmbeddingModels(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
@@ -1377,14 +1375,8 @@ func TestListModels_EmbeddingType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListModels failed: %v", err)
 	}
-	if len(models) != 2 {
-		t.Fatalf("expected 2 models, got %d", len(models))
-	}
-	if models[0].Type != sdk.ModelTypeChat {
-		t.Errorf("expected chat type for generateContent model, got %q", models[0].Type)
-	}
-	if models[1].Type != sdk.ModelTypeEmbedding {
-		t.Errorf("expected embedding type for embedContent model, got %q", models[1].Type)
+	if len(models) != 1 || models[0].ID != "gemini-2.5-flash" || models[0].DisplayName != "Gemini 2.5 Flash" {
+		t.Fatalf("models: got %+v, want gemini-2.5-flash only", models)
 	}
 }
 

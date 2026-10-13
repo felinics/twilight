@@ -383,7 +383,6 @@ func (p *Provider) ListModels(ctx context.Context) ([]sdk.Model, error) {
 			ID:          m.ID,
 			DisplayName: m.DisplayName,
 			Provider:    p,
-			Type:        sdk.ModelTypeChat,
 		})
 	}
 	return models, nil
@@ -446,7 +445,6 @@ func (p *Provider) ChatModel(id string) *sdk.Model {
 	return &sdk.Model{
 		ID:       id,
 		Provider: p,
-		Type:     sdk.ModelTypeChat,
 	}
 }
 

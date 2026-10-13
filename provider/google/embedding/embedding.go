@@ -67,6 +67,42 @@ func (p *Provider) EmbeddingModel(id string) *sdk.EmbeddingModel {
 	}
 }
 
+// ListModels lists the models that support embedContent.
+func (p *Provider) ListModels(ctx context.Context) ([]sdk.EmbeddingModel, error) {
+	resp, err := utils.FetchJSON[modelsListResponse](ctx, p.httpClient, &utils.RequestOptions{
+		Method:      http.MethodGet,
+		BaseURL:     p.baseURL,
+		Path:        "/models",
+		Headers:     p.authHeaders(),
+		Provider:    providerName,
+		DecodeError: errorformat.DecodeGoogle,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("google: list embedding models request failed: %w", err)
+	}
+	models := make([]sdk.EmbeddingModel, 0, len(resp.Models))
+	for _, m := range resp.Models {
+		if !supportsEmbed(m.SupportedGenerationMethods) {
+			continue
+		}
+		model := p.EmbeddingModel(strings.TrimPrefix(m.Name, "models/"))
+		model.DisplayName = m.DisplayName
+		model.Description = m.Description
+		model.MaxInputTokens = m.InputTokenLimit
+		models = append(models, *model)
+	}
+	return models, nil
+}
+
+func supportsEmbed(methods []string) bool {
+	for _, method := range methods {
+		if method == "embedContent" {
+			return true
+		}
+	}
+	return false
+}
+
 // DoEmbed implements sdk.EmbeddingProvider.
 // For a single value it calls the embedContent endpoint;
 // for multiple values it calls batchEmbedContents.
