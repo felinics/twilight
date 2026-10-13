@@ -1,6 +1,10 @@
 package responses
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/felinics/twilight/provider/openai/internal/modeldiscovery"
+)
 
 // --- Request types ---
 
@@ -263,12 +267,7 @@ type responsesFailedChunk struct {
 // --- Models API response types ---
 
 type modelsListResponse struct {
-	Data []modelObject `json:"data"`
+	Data []modeldiscovery.Model `json:"data"`
 }
 
-type modelObject struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	OwnedBy string `json:"owned_by"`
-}
+type modelObject = modeldiscovery.Model
