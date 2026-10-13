@@ -113,11 +113,12 @@ func (sp *streamProcessor) processReasoning(delta *chatChunkDelta, chunkID strin
 		// Details are kept whatever they carry: an encrypted entry has no text
 		// but is what the endpoint needs back to continue the reasoning.
 		sp.reasoningDetails = mergeReasoningDetails(sp.reasoningDetails, delta.ReasoningDetails)
-		if reasoningContent == "" && !sp.reasoningBlockSeen {
-			// A detail without text still opens the block, so the details reach
-			// the block's end metadata.
-			sp.startReasoning(chunkID)
-		}
+		// A detail without text still opens the block, so the details reach
+		// the block's end metadata. It can arrive after text or a tool call
+		// has closed the block (Gemini sends the answer's thought signature
+		// after the answer); like reasoning text that resumes, it then reopens
+		// the block under the same ID, and the block's next end carries it.
+		sp.startReasoning(chunkID)
 	}
 	if reasoningContent == "" {
 		// A delta that carries reasoning_content as "" (not null) announces a
