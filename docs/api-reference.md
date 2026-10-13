@@ -1217,7 +1217,7 @@ func (p *Provider) DoEmbed(ctx context.Context, params sdk.EmbedParams) (*sdk.Em
 
 | Method | Description |
 |--------|-------------|
-| `EmbeddingModel(id)` | Creates an `EmbeddingModel` bound to this provider (MaxEmbeddingsPerCall: 2048) |
+| `EmbeddingModel(id)` | Creates an `EmbeddingModel` bound to this provider (MaxEmbeddingsPerCall: 100) |
 | `DoEmbed(ctx, params)` | Single value: `embedContent`; multiple values: `batchEmbedContents` |
 
 #### Supported Models

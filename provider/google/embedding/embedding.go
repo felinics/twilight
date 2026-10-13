@@ -14,6 +14,9 @@ import (
 const (
 	defaultBaseURL = "https://generativelanguage.googleapis.com/v1beta"
 
+	maxEmbeddingsPerCall = 100
+	modelsPageSize       = 1000
+
 	// providerName identifies this package in APIError.Provider.
 	providerName = "google-embedding"
 )
@@ -63,35 +66,55 @@ func (p *Provider) EmbeddingModel(id string) *sdk.EmbeddingModel {
 	return &sdk.EmbeddingModel{
 		ID:                   id,
 		Provider:             p,
-		MaxEmbeddingsPerCall: 2048,
+		MaxEmbeddingsPerCall: maxEmbeddingsPerCall,
 	}
 }
 
 // ListModels lists the models that support embedContent.
 func (p *Provider) ListModels(ctx context.Context) ([]sdk.EmbeddingModel, error) {
-	resp, err := utils.FetchJSON[modelsListResponse](ctx, p.httpClient, &utils.RequestOptions{
-		Method:      http.MethodGet,
-		BaseURL:     p.baseURL,
-		Path:        "/models",
-		Headers:     p.authHeaders(),
-		Provider:    providerName,
-		DecodeError: errorformat.DecodeGoogle,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("google: list embedding models request failed: %w", err)
-	}
-	models := make([]sdk.EmbeddingModel, 0, len(resp.Models))
-	for _, m := range resp.Models {
-		if !supportsEmbed(m.SupportedGenerationMethods) {
-			continue
+	models := make([]sdk.EmbeddingModel, 0)
+	pageToken := ""
+	seenPageTokens := make(map[string]struct{})
+
+	for {
+		query := map[string]string{"pageSize": fmt.Sprint(modelsPageSize)}
+		if pageToken != "" {
+			if _, seen := seenPageTokens[pageToken]; seen {
+				return nil, fmt.Errorf("google: list embedding models request failed: repeated page token %q", pageToken)
+			}
+			seenPageTokens[pageToken] = struct{}{}
+			query["pageToken"] = pageToken
 		}
-		model := p.EmbeddingModel(strings.TrimPrefix(m.Name, "models/"))
-		model.DisplayName = m.DisplayName
-		model.Description = m.Description
-		model.MaxInputTokens = m.InputTokenLimit
-		models = append(models, *model)
+
+		resp, err := utils.FetchJSON[modelsListResponse](ctx, p.httpClient, &utils.RequestOptions{
+			Method:      http.MethodGet,
+			BaseURL:     p.baseURL,
+			Path:        "/models",
+			Query:       query,
+			Headers:     p.authHeaders(),
+			Provider:    providerName,
+			DecodeError: errorformat.DecodeGoogle,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("google: list embedding models request failed: %w", err)
+		}
+
+		for _, m := range resp.Models {
+			if !supportsEmbed(m.SupportedGenerationMethods) {
+				continue
+			}
+			model := p.EmbeddingModel(strings.TrimPrefix(m.Name, "models/"))
+			model.DisplayName = m.DisplayName
+			model.Description = m.Description
+			model.MaxInputTokens = m.InputTokenLimit
+			models = append(models, *model)
+		}
+
+		if resp.NextPageToken == "" {
+			return models, nil
+		}
+		pageToken = resp.NextPageToken
 	}
-	return models, nil
 }
 
 func supportsEmbed(methods []string) bool {

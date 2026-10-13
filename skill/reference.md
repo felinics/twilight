@@ -1004,7 +1004,7 @@ Task type values:
 
 Behavior notes:
 
-- `EmbeddingModel(id)` returns a model with `MaxEmbeddingsPerCall: 2048`
+- `EmbeddingModel(id)` returns a model with `MaxEmbeddingsPerCall: 100`
 - single-value embedding uses `embedContent`
 - multi-value embedding uses `batchEmbedContents`
 

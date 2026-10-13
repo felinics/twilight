@@ -259,8 +259,8 @@ func TestEmbeddingModel(t *testing.T) {
 	if model.ID != "gemini-embedding-001" {
 		t.Errorf("expected model ID 'gemini-embedding-001', got %q", model.ID)
 	}
-	if model.MaxEmbeddingsPerCall != 2048 {
-		t.Errorf("expected MaxEmbeddingsPerCall 2048, got %d", model.MaxEmbeddingsPerCall)
+	if model.MaxEmbeddingsPerCall != 100 {
+		t.Errorf("expected MaxEmbeddingsPerCall 100, got %d", model.MaxEmbeddingsPerCall)
 	}
 	if model.Provider == nil {
 		t.Error("expected non-nil provider")
@@ -322,43 +322,104 @@ func TestClientEmbedMany(t *testing.T) {
 // ---------- ListModels ----------
 
 func TestListModels(t *testing.T) {
+	var pageTokens []string
 	_, p := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/models" {
 			t.Errorf("request: got %s %s, want GET /models", r.Method, r.URL.Path)
 		}
+		if got := r.URL.Query().Get("pageSize"); got != "1000" {
+			t.Errorf("pageSize: got %q, want 1000", got)
+		}
+		if got := r.Header.Get("x-goog-api-key"); got != "test-key" {
+			t.Errorf("x-goog-api-key: got %q, want test-key", got)
+		}
+
+		pageToken := r.URL.Query().Get("pageToken")
+		pageTokens = append(pageTokens, pageToken)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"models": []map[string]any{
-				{
-					"name":                       "models/gemini-2.5-flash",
-					"supportedGenerationMethods": []string{"generateContent"},
+		switch pageToken {
+		case "":
+			json.NewEncoder(w).Encode(map[string]any{
+				"models": []map[string]any{
+					{
+						"name":                       "models/gemini-2.5-flash",
+						"supportedGenerationMethods": []string{"generateContent"},
+					},
+					{
+						"name":                       "models/gemini-embedding-001",
+						"displayName":                "Gemini Embedding 001",
+						"description":                "Text embeddings",
+						"inputTokenLimit":            2048,
+						"supportedGenerationMethods": []string{"embedContent", "countTokens"},
+					},
 				},
-				{
-					"name":                       "models/gemini-embedding-001",
-					"displayName":                "Gemini Embedding 001",
-					"description":                "Text embeddings",
-					"inputTokenLimit":            2048,
-					"supportedGenerationMethods": []string{"embedContent", "countTokens"},
+				"nextPageToken": "second-page",
+			})
+		case "second-page":
+			json.NewEncoder(w).Encode(map[string]any{
+				"models": []map[string]any{
+					{
+						"name":                       "models/text-embedding-004",
+						"displayName":                "Text Embedding 004",
+						"description":                "Second-page embeddings",
+						"inputTokenLimit":            3072,
+						"supportedGenerationMethods": []string{"embedContent"},
+					},
 				},
-			},
-		})
+			})
+		default:
+			t.Errorf("unexpected pageToken %q", pageToken)
+			http.Error(w, "unexpected page token", http.StatusBadRequest)
+		}
 	})
 
 	models, err := p.ListModels(context.Background())
 	if err != nil {
 		t.Fatalf("ListModels: %v", err)
 	}
-	if len(models) != 1 {
-		t.Fatalf("models: got %d, want the embedding model only", len(models))
+	if len(pageTokens) != 2 || pageTokens[0] != "" || pageTokens[1] != "second-page" {
+		t.Fatalf("page tokens: got %v, want [\"\" second-page]", pageTokens)
 	}
-	m := models[0]
-	if m.ID != "gemini-embedding-001" || m.DisplayName != "Gemini Embedding 001" || m.Description != "Text embeddings" {
-		t.Errorf("model: %+v", m)
+	if len(models) != 2 {
+		t.Fatalf("models: got %d, want two embedding models", len(models))
 	}
-	if m.MaxInputTokens != 2048 || m.MaxEmbeddingsPerCall != 2048 {
-		t.Errorf("limits: input %d, per call %d", m.MaxInputTokens, m.MaxEmbeddingsPerCall)
+
+	first := models[0]
+	if first.ID != "gemini-embedding-001" || first.DisplayName != "Gemini Embedding 001" || first.Description != "Text embeddings" {
+		t.Errorf("first model: %+v", first)
 	}
-	if m.Provider != p {
+	if first.MaxInputTokens != 2048 || first.MaxEmbeddingsPerCall != 100 {
+		t.Errorf("first model limits: input %d, per call %d", first.MaxInputTokens, first.MaxEmbeddingsPerCall)
+	}
+	if first.Provider != p {
 		t.Error("a listed model must be bound to the provider")
+	}
+
+	second := models[1]
+	if second.ID != "text-embedding-004" || second.DisplayName != "Text Embedding 004" || second.Description != "Second-page embeddings" {
+		t.Errorf("second model: %+v", second)
+	}
+	if second.MaxInputTokens != 3072 || second.MaxEmbeddingsPerCall != 100 {
+		t.Errorf("second model limits: input %d, per call %d", second.MaxInputTokens, second.MaxEmbeddingsPerCall)
+	}
+	if second.Provider != p {
+		t.Error("a listed second-page model must be bound to the provider")
+	}
+}
+
+func TestListModels_RejectsRepeatedPageToken(t *testing.T) {
+	requests := 0
+	_, p := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"nextPageToken": "repeated"})
+	})
+
+	_, err := p.ListModels(context.Background())
+	if err == nil {
+		t.Fatal("ListModels: expected an error for a repeated page token")
+	}
+	if requests != 2 {
+		t.Fatalf("requests: got %d, want 2", requests)
 	}
 }

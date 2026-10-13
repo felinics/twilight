@@ -39,7 +39,8 @@ type embeddingValues struct {
 // --- Models API response types ---
 
 type modelsListResponse struct {
-	Models []modelObject `json:"models"`
+	Models        []modelObject `json:"models"`
+	NextPageToken string        `json:"nextPageToken,omitempty"`
 }
 
 type modelObject struct {

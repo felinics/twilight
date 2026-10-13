@@ -1308,6 +1308,7 @@ func TestDoGenerate_ThinkingConfig(t *testing.T) {
 // ---------- ListModels / Test / TestModel unit tests ----------
 
 func TestListModels(t *testing.T) {
+	var pageTokens []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/models" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
@@ -1315,13 +1316,34 @@ func TestListModels(t *testing.T) {
 		if r.Method != http.MethodGet {
 			t.Errorf("expected GET, got %s", r.Method)
 		}
+		if got := r.URL.Query().Get("pageSize"); got != "1000" {
+			t.Errorf("pageSize: got %q, want 1000", got)
+		}
+		if got := r.Header.Get("x-goog-api-key"); got != "test-key" {
+			t.Errorf("x-goog-api-key: got %q, want test-key", got)
+		}
+
+		pageToken := r.URL.Query().Get("pageToken")
+		pageTokens = append(pageTokens, pageToken)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"models": []map[string]any{
-				{"name": "models/gemini-2.5-pro", "displayName": "Gemini 2.5 Pro"},
-				{"name": "models/gemini-2.5-flash", "displayName": "Gemini 2.5 Flash"},
-			},
-		})
+		switch pageToken {
+		case "":
+			json.NewEncoder(w).Encode(map[string]any{
+				"models": []map[string]any{
+					{"name": "models/gemini-2.5-pro", "displayName": "Gemini 2.5 Pro"},
+				},
+				"nextPageToken": "second-page",
+			})
+		case "second-page":
+			json.NewEncoder(w).Encode(map[string]any{
+				"models": []map[string]any{
+					{"name": "models/gemini-2.5-flash", "displayName": "Gemini 2.5 Flash"},
+				},
+			})
+		default:
+			t.Errorf("unexpected pageToken %q", pageToken)
+			http.Error(w, "unexpected page token", http.StatusBadRequest)
+		}
 	}))
 	defer srv.Close()
 
@@ -1334,14 +1356,36 @@ func TestListModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListModels failed: %v", err)
 	}
+	if len(pageTokens) != 2 || pageTokens[0] != "" || pageTokens[1] != "second-page" {
+		t.Fatalf("page tokens: got %v, want [\"\" second-page]", pageTokens)
+	}
 	if len(models) != 2 {
 		t.Fatalf("expected 2 models, got %d", len(models))
 	}
-	if models[0].ID != "gemini-2.5-pro" {
-		t.Errorf("expected first model 'gemini-2.5-pro', got %q", models[0].ID)
+	if models[0].ID != "gemini-2.5-pro" || models[0].DisplayName != "Gemini 2.5 Pro" {
+		t.Errorf("first model: got %+v", models[0])
 	}
-	if models[0].DisplayName != "Gemini 2.5 Pro" {
-		t.Errorf("expected display name 'Gemini 2.5 Pro', got %q", models[0].DisplayName)
+	if models[1].ID != "gemini-2.5-flash" || models[1].DisplayName != "Gemini 2.5 Flash" {
+		t.Errorf("second model: got %+v", models[1])
+	}
+}
+
+func TestListModels_RejectsRepeatedPageToken(t *testing.T) {
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"nextPageToken": "repeated"})
+	}))
+	defer srv.Close()
+
+	p := generativeai.New(generativeai.WithBaseURL(srv.URL))
+	_, err := p.ListModels(context.Background())
+	if err == nil {
+		t.Fatal("ListModels: expected an error for a repeated page token")
+	}
+	if requests != 2 {
+		t.Fatalf("requests: got %d, want 2", requests)
 	}
 }
 
