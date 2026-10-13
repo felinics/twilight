@@ -136,10 +136,10 @@ func TestReasoningReplay_UnknownFieldFailsBeforeSending(t *testing.T) {
 	}
 }
 
-// OpenRouter streams reasoning_details pieces keyed by index: text arrives in
-// pieces, the signature on a later piece, and an encrypted entry with no text.
-// The block's metadata must hold the merged entries, every field kept.
-func TestDoStream_ReasoningDetailsMergedByIndex(t *testing.T) {
+// OpenRouter streams reasoning_details in wire order: text arrives in pieces,
+// the signature on a later piece, and an encrypted entry with no text. The
+// block's metadata must hold the merged entries, every field kept.
+func TestDoStream_ReasoningDetailsMergedInWireOrder(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)

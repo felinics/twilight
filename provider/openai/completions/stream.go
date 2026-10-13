@@ -3,7 +3,6 @@ package completions
 import (
 	"context"
 	"encoding/json"
-	"strings"
 
 	"github.com/felinics/twilight/sdk"
 )
@@ -24,7 +23,6 @@ type streamProcessor struct {
 	finishStepPending  bool
 	pendingToolCalls   map[int]*streamingToolCall
 	reasoningDetails   []chatReasoningDetail
-	reasoningText      strings.Builder
 	// done is set by the chunk that carries a finish_reason or by the [DONE]
 	// sentinel that follows it
 	// (https://platform.openai.com/docs/api-reference/chat-streaming); either
@@ -115,12 +113,6 @@ func (sp *streamProcessor) processReasoning(delta *chatChunkDelta, chunkID strin
 		// Details are kept whatever they carry: an encrypted entry has no text
 		// but is what the endpoint needs back to continue the reasoning.
 		sp.reasoningDetails = mergeReasoningDetails(sp.reasoningDetails, delta.ReasoningDetails)
-		if reasoningContent != "" {
-			// Builder.String() is a zero-copy view, so the per-delta reads below
-			// stay O(1) while appends stay amortized O(1).
-			reasoningContent = trimReasoningPrefix(reasoningContent, sp.reasoningText.String())
-			sp.reasoningText.WriteString(reasoningContent)
-		}
 		if reasoningContent == "" && !sp.reasoningBlockSeen {
 			// A detail without text still opens the block, so the details reach
 			// the block's end metadata.
@@ -152,55 +144,42 @@ func (sp *streamProcessor) startReasoning(chunkID string) {
 	sp.reasoningBlockSeen = true
 }
 
-func trimReasoningPrefix(text, previous string) string {
-	if previous == "" {
-		return text
-	}
-	if len(text) >= len(previous) && text[:len(previous)] == previous {
-		return text[len(previous):]
-	}
-	return text
-}
-
-// mergeReasoningDetails folds one delta's reasoning_details into the entries
-// accumulated so far. Streamed entries are keyed by index: text and summary
-// arrive in pieces and are concatenated (a piece that repeats the accumulated
-// text is cumulative and replaces it), while signature, data and every other
-// field are set by whichever piece carries them. An entry without an index is
-// keyed by its position in the delta. The merged entries keep every field they
-// arrived with, index included, since OpenRouter requires the replayed sequence
-// to match what the model produced.
+// mergeReasoningDetails rebuilds reasoning_details in wire order. OpenRouter's
+// index is optional and is not a stable identity across chunks, so only adjacent
+// text or summary details of the same type are fragments of one entry. Other
+// detail types (notably encrypted details) always remain separate. All fields
+// are retained for replay; later fragments can add fields such as a signature.
 func mergeReasoningDetails(acc, delta []chatReasoningDetail) []chatReasoningDetail {
-	for position, detail := range delta {
-		key := position
-		if index, ok := detail["index"].(float64); ok {
-			key = int(index)
+	for _, detail := range delta {
+		detailType, _ := detail["type"].(string)
+		textField := ""
+		switch detailType {
+		case "reasoning.text":
+			textField = "text"
+		case "reasoning.summary":
+			textField = "summary"
 		}
-		target := -1
-		for i, existing := range acc {
-			existingKey := i
-			if index, ok := existing["index"].(float64); ok {
-				existingKey = int(index)
-			}
-			if existingKey == key {
-				target = i
-				break
-			}
-		}
-		if target < 0 {
+
+		if textField == "" || len(acc) == 0 || acc[len(acc)-1]["type"] != detailType {
 			acc = append(acc, copyReasoningDetail(detail))
 			continue
 		}
+
+		target := acc[len(acc)-1]
 		for field, value := range detail {
 			piece, isString := value.(string)
 			switch {
-			case isString && (field == "text" || field == "summary"):
-				previous, _ := acc[target][field].(string)
-				acc[target][field] = previous + trimReasoningPrefix(piece, previous)
+			case field == textField && isString:
+				previous, _ := target[field].(string)
+				target[field] = previous + piece
 			case isString && piece == "":
-				// An empty piece does not clear a value set earlier.
+				// An empty fragment does not clear a value set earlier, but
+				// retain the field if this is its first appearance.
+				if _, exists := target[field]; !exists {
+					target[field] = value
+				}
 			default:
-				acc[target][field] = value
+				target[field] = value
 			}
 		}
 	}
