@@ -356,6 +356,8 @@ provider := completions.New(
 | Cached token details | ✅ |
 | ListModels / Test / TestModel | ✅ |
 
+`Request.ResponseFormat` maps onto `response_format`. `text` and `json_object` are sent as `{"type":"..."}`. `json_schema` wraps the schema the way Chat Completions expects, `{"type":"json_schema","json_schema":{"name":"response","schema":{...}}}`; `strict` is not set, matching the Responses provider's `text.format`. A `json_schema` format with a nil `JSONSchema` is sent as `json_object`.
+
 ### Custom HTTP Client
 
 Use `WithHTTPClient` for custom timeouts, proxies, or TLS settings:
@@ -637,6 +639,7 @@ The provider reuses the same OpenAI-compatible chat-completions mapping as Twili
 | Assistant reasoning | `reasoning_content` field |
 | Tool call | `tool_calls` |
 | Tool result | `{"role":"tool","tool_call_id":...}` |
+| `ResponseFormat` | `response_format`, same shape as the OpenAI Completions provider (`json_schema` → `{"name":"response","schema":{...}}`) |
 
 ### Supported Features
 

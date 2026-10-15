@@ -185,16 +185,34 @@ func (p *Provider) buildRequest(request *sdk.Request) (*chatRequest, error) {
 		req.Tools = convertTools(request.Tools)
 		req.ToolChoice = convertToolChoice(request.ToolChoice)
 	}
-	if request.ResponseFormat != nil {
-		req.ResponseFormat = &chatRespFormat{
-			Type:       string(request.ResponseFormat.Type),
-			JSONSchema: request.ResponseFormat.JSONSchema,
-		}
-	}
+	req.ResponseFormat = convertResponseFormat(request.ResponseFormat)
 	if err := sdk.ApplyProviderOptions(p.Name(), request.ProviderOptions, req); err != nil {
 		return nil, fmt.Errorf("copilot: %w", err)
 	}
 	return req, nil
+}
+
+// convertResponseFormat maps the SDK response format onto the Chat Completions
+// wire shape, matching provider/openai/completions: json_schema wraps the
+// schema as {"name":"response","schema":{...}} and degrades to json_object
+// when no schema is given; other types send only their type.
+func convertResponseFormat(rf *sdk.ResponseFormat) *chatRespFormat {
+	if rf == nil {
+		return nil
+	}
+	if rf.Type != sdk.ResponseFormatJSONSchema {
+		return &chatRespFormat{Type: string(rf.Type)}
+	}
+	if rf.JSONSchema == nil {
+		return &chatRespFormat{Type: string(sdk.ResponseFormatJSONObject)}
+	}
+	return &chatRespFormat{
+		Type: string(sdk.ResponseFormatJSONSchema),
+		JSONSchema: &chatRespJSONSchema{
+			Name:   "response",
+			Schema: rf.JSONSchema,
+		},
+	}
 }
 
 // convertToolChoice maps the SDK's closed ToolChoice onto the OpenAI wire form:

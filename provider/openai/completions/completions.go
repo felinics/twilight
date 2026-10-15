@@ -288,12 +288,7 @@ func (p *Provider) buildRequest(req *sdk.Request) (*chatRequest, error) {
 		chatReq.Tools = convertTools(req.Tools)
 		chatReq.ToolChoice = toolChoiceForWire(req.ToolChoice)
 	}
-	if req.ResponseFormat != nil {
-		chatReq.ResponseFormat = &chatRespFormat{
-			Type:       string(req.ResponseFormat.Type),
-			JSONSchema: req.ResponseFormat.JSONSchema,
-		}
-	}
+	chatReq.ResponseFormat = convertResponseFormat(req.ResponseFormat)
 	if err := p.applyChatCompletionsCompat(chatReq); err != nil {
 		return nil, err
 	}
@@ -350,6 +345,35 @@ func (p *Provider) applyChatCompletionsCompat(req *chatRequest) error {
 		}
 	}
 	return nil
+}
+
+// responseFormatSchemaName is the json_schema name sent on the wire. The SDK
+// has no per-request name, so it mirrors the Responses provider's fixed
+// text.format name.
+const responseFormatSchemaName = "response"
+
+// convertResponseFormat maps the SDK response format onto the Chat Completions
+// wire shape. A json_schema format wraps the schema as
+// {"name":"response","schema":{...}}; without a schema there is nothing to
+// constrain against, so it degrades to json_object (plain JSON mode), which
+// every OpenAI-compatible upstream accepts. Other types send only their type.
+func convertResponseFormat(rf *sdk.ResponseFormat) *chatRespFormat {
+	if rf == nil {
+		return nil
+	}
+	if rf.Type != sdk.ResponseFormatJSONSchema {
+		return &chatRespFormat{Type: string(rf.Type)}
+	}
+	if rf.JSONSchema == nil {
+		return &chatRespFormat{Type: string(sdk.ResponseFormatJSONObject)}
+	}
+	return &chatRespFormat{
+		Type: string(sdk.ResponseFormatJSONSchema),
+		JSONSchema: &chatRespJSONSchema{
+			Name:   responseFormatSchemaName,
+			Schema: rf.JSONSchema,
+		},
+	}
 }
 
 func convertTools(tools []sdk.ToolDefinition) []chatTool {

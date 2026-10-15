@@ -25,8 +25,17 @@ type chatStreamOptions struct {
 }
 
 type chatRespFormat struct {
-	Type       string `json:"type"`
-	JSONSchema any    `json:"json_schema,omitempty"`
+	Type       string              `json:"type"`
+	JSONSchema *chatRespJSONSchema `json:"json_schema,omitempty"`
+}
+
+// chatRespJSONSchema is the Chat Completions json_schema wrapper. The schema
+// itself is nested under "schema" next to a required "name"; sending the bare
+// schema as json_schema is rejected by strict OpenAI-compatible upstreams.
+// strict is left unset, matching the Responses provider's text.format.
+type chatRespJSONSchema struct {
+	Name   string `json:"name"`
+	Schema any    `json:"schema"`
 }
 
 type chatTool struct {
