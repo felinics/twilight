@@ -312,6 +312,45 @@ Supported config keys:
 | `format` | `string` | `wav` | Output format for non-streaming synthesis (`wav` or `pcm16`) |
 | `style_prompt` | `string` | `""` | Optional style prompt prepended to the request |
 
+## OpenRouter TTS Provider
+
+The `provider/openrouter/speech` package uses the audio output of OpenRouter's `/chat/completions` endpoint (`modalities: ["text", "audio"]`, `audio.format: "pcm16"`, `stream: true`); OpenRouter has no `/audio/speech` endpoint. The audio arrives as base64 PCM-16 (24 kHz, mono, little-endian) in the `delta.audio.data` field of the SSE chunks.
+
+```go
+import "github.com/felinics/twilight/provider/openrouter/speech"
+
+provider := speech.New(
+    speech.WithAPIKey("sk-or-..."),
+)
+model := provider.SpeechModel("openai/gpt-audio-mini")
+
+sr, err := sdk.StreamSpeech(ctx,
+    sdk.WithSpeechModel(model),
+    sdk.WithText("Hello from OpenRouter."),
+    sdk.WithSpeechConfig(map[string]any{
+        "voice": "coral",
+    }),
+)
+```
+
+Supported config keys:
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `model` | `string` | `openai/gpt-audio-mini` | OpenRouter model ID, used when the `SpeechModel` has no ID |
+| `voice` | `string` | `coral` | Voice name supported by the model |
+| `speed` | `float64` | `0` (not sent) | Speaking rate, sent as an extra body field (model-dependent) |
+
+`DoSynthesize` reads the whole SSE stream and returns one complete WAV file (`audio/wav`).
+
+`DoStream` forwards audio as each SSE audio delta arrives, with `ContentType` `audio/wav`:
+
+- The first chunk starts with a 44-byte WAV header whose RIFF and `data` sizes are `0xFFFFFFFF`, the usual marker for a WAV of unknown length, followed by the first PCM-16 samples.
+- Every later chunk is raw PCM-16 continuing the same `data` chunk. Chunks hold whole 2-byte samples; only the last one can end on an odd byte, when the upstream sent an odd number of bytes in total.
+- Concatenating every chunk gives a playable WAV file with the same PCM data as `DoSynthesize`; only the header sizes differ. Rewrite bytes 4–7 and 40–43 if a tool needs exact sizes.
+
+How soon and how often deltas arrive is up to OpenRouter and the model it routes to; the provider adds no buffering of its own. A non-2xx response is returned by `StreamSpeech` before the stream starts. An OpenRouter mid-stream error event ends the stream, and `Err` returns it as an `*sdk.APIError` with `StatusCode` 0.
+
 ## Alibaba Cloud DashScope CosyVoice Provider
 
 The `provider/alibabacloud/speech` package implements the WebSocket-based DashScope CosyVoice API. The provider connects to `wss://dashscope.aliyuncs.com/api-ws/v1/inference/` with Bearer auth and uses the `run-task` → `continue-task` → `finish-task` message sequence.
