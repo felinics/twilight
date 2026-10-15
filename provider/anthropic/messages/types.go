@@ -186,17 +186,3 @@ type streamDelta struct {
 	StopReason   string `json:"stop_reason,omitempty"`
 	StopSequence string `json:"stop_sequence,omitempty"`
 }
-
-// --- Models API response types ---
-
-type modelsListResponse struct {
-	Data    []anthropicModelObject `json:"data"`
-	HasMore bool                   `json:"has_more"`
-}
-
-type anthropicModelObject struct {
-	ID          string `json:"id"`
-	Type        string `json:"type"`
-	DisplayName string `json:"display_name"`
-	CreatedAt   string `json:"created_at"`
-}

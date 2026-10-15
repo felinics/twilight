@@ -80,6 +80,58 @@ for _, m := range models {
 }
 ```
 
+`ListModels` never filters the list. It fills the optional `Model` metadata
+from what the endpoint reports and leaves the rest at its zero value ("not
+stated"):
+
+| Provider | Endpoint reports | Filled |
+|----------|------------------|--------|
+| OpenAI Completions / Responses against OpenAI | `id`, `object`, `created`, `owned_by` | `ID` |
+| OpenAI Completions / Responses against OpenRouter, or a host with the same fields | `name`, `description`, `context_length`, `top_provider`, `architecture`, `supported_parameters`, `reasoning` | `DisplayName`, `Description`, `ContextWindow`, `MaxOutputTokens`, `Modalities`, `ToolCall`, `StructuredOutput`, `Reasoning` |
+| Anthropic Messages | `display_name`, `max_input_tokens`, `max_tokens`, `capabilities` | `DisplayName`, `ContextWindow`, `MaxOutputTokens`, and from `capabilities`: `Modalities`, `StructuredOutput`, `Reasoning` |
+
+OpenRouter fields map as follows:
+
+- `ContextWindow` is `context_length`; `MaxOutputTokens` is
+  `top_provider.max_completion_tokens` (0 when null).
+- `Modalities` come from `architecture.input_modalities` and
+  `output_modalities`; `file` becomes `pdf` and other values pass through.
+- `ToolCall` is `supported_parameters` containing `tools`. `StructuredOutput`
+  is `supported_parameters` containing `structured_outputs`; `response_format`
+  alone does not count, since it can mean JSON mode without a schema.
+- `Reasoning` is set when `supported_parameters` contains `reasoning` or
+  `include_reasoning`, or the `reasoning` object says the model always reasons
+  or lists effort levels. `Efforts` are `supported_efforts` without `none`,
+  weakest first, with `Dialect` tier; `supports_max_tokens` gives a `Budget`
+  without bounds; `Off` is rejected when `mandatory` is true and accepted when
+  it is false or `none` is an effort; `Default` comes from `default_enabled`
+  and `default_effort`. `Toggle` and `Replay` are not stated.
+
+Anthropic fields map as follows:
+
+- `ContextWindow` is `max_input_tokens`. On Claude the response shares the
+  context window with the input, so the input limit is the whole window. A
+  compatible host may report a smaller input limit that leaves room for the
+  response (OpenRouter does for some models), and `ContextWindow` is then that
+  smaller value. `MaxOutputTokens` is `max_tokens`.
+- With `capabilities`, `Modalities` are text in and out plus image and PDF
+  input when `image_input` and `pdf_input` are supported, and
+  `StructuredOutput` is `structured_outputs`. `Reasoning` is set when
+  `thinking` is supported: `Efforts` are the supported `effort` levels;
+  `thinking.types.enabled` gives a `Budget` without bounds; `Dialect` is
+  adaptive when `thinking.types.adaptive` is supported, otherwise budget;
+  `thinking.types.disabled` decides `Off` and, when accepted, `Toggle`.
+  `Default` is not stated. Tool use is not among the capabilities, so
+  `ToolCall` stays false.
+- `ListModels` reads every page: `limit=1000`, then `after_id` set to the
+  previous `last_id` while `has_more` is true. It stops with the models
+  already read when a page brings no new model or no cursor. A compatible
+  host that rejects the first page's `limit=1000` with 400 or 422 is listed
+  again once without `limit`, at its default page size.
+
+Fields in a shape that does not decode are dropped for that model rather than
+failing the list.
+
 To check a single model without listing all:
 
 ```go
@@ -205,6 +257,9 @@ model := provider.ChatModel("gpt-4o-mini")
 | `ListModels` | `GET /models` |
 | `Test` | `GET /models?limit=1` |
 | `TestModel` | `GET /models/{id}` |
+
+`ListModels` fills model metadata from OpenRouter's `/models` fields when the
+host sends them; see [Model Discovery](#model-discovery).
 
 ### OpenAI-Compatible Providers
 
@@ -421,6 +476,9 @@ their native roles and positions.
 | `ListModels` | `GET /models` |
 | `Test` | `GET /models?limit=1` |
 | `TestModel` | `GET /models/{id}` |
+
+`ListModels` fills model metadata from OpenRouter's `/models` fields when the
+host sends them; see [Model Discovery](#model-discovery).
 
 ### Using with OpenRouter
 
@@ -887,9 +945,12 @@ Set `TTL: "1h"` for a 1-hour cache (higher write rate; the default empty TTL is 
 
 | Method | API Endpoint |
 |--------|-------------|
-| `ListModels` | `GET /v1/models` |
+| `ListModels` | `GET /v1/models?limit=1000`, then `&after_id={last_id}` while `has_more` |
 | `Test` | `GET /v1/models?limit=1` |
 | `TestModel` | `GET /v1/models/{id}` |
+
+`ListModels` fills limits and capabilities into model metadata; see
+[Model Discovery](#model-discovery).
 
 ---
 

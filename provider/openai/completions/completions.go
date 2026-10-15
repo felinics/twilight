@@ -10,6 +10,7 @@ import (
 
 	"github.com/felinics/twilight/internal/errorformat"
 	"github.com/felinics/twilight/internal/messagecompat"
+	"github.com/felinics/twilight/internal/openaimodels"
 	"github.com/felinics/twilight/internal/utils"
 	"github.com/felinics/twilight/sdk"
 )
@@ -144,7 +145,7 @@ func (p *Provider) Name() string {
 }
 
 func (p *Provider) ListModels(ctx context.Context) ([]sdk.Model, error) {
-	resp, err := utils.FetchJSON[modelsListResponse](ctx, p.httpClient, &utils.RequestOptions{
+	resp, err := utils.FetchJSON[openaimodels.List](ctx, p.httpClient, &utils.RequestOptions{
 		Method:      http.MethodGet,
 		BaseURL:     p.baseURL,
 		Path:        "/models",
@@ -157,18 +158,11 @@ func (p *Provider) ListModels(ctx context.Context) ([]sdk.Model, error) {
 		return nil, fmt.Errorf("openai: list models request failed: %w", err)
 	}
 
-	models := make([]sdk.Model, 0, len(resp.Data))
-	for _, m := range resp.Data {
-		models = append(models, sdk.Model{
-			ID:       m.ID,
-			Provider: p,
-		})
-	}
-	return models, nil
+	return resp.Models(p), nil
 }
 
 func (p *Provider) Test(ctx context.Context) error {
-	_, err := utils.FetchJSON[modelsListResponse](ctx, p.httpClient, &utils.RequestOptions{
+	_, err := utils.FetchJSON[openaimodels.List](ctx, p.httpClient, &utils.RequestOptions{
 		Method:      http.MethodGet,
 		BaseURL:     p.baseURL,
 		Path:        "/models",
@@ -185,7 +179,7 @@ func (p *Provider) Test(ctx context.Context) error {
 }
 
 func (p *Provider) TestModel(ctx context.Context, modelID string) (*sdk.ModelTestResult, error) {
-	_, err := utils.FetchJSON[modelObject](ctx, p.httpClient, &utils.RequestOptions{
+	_, err := utils.FetchJSON[openaimodels.Object](ctx, p.httpClient, &utils.RequestOptions{
 		Method:      http.MethodGet,
 		BaseURL:     p.baseURL,
 		Path:        "/models/" + modelID,
