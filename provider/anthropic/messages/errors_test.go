@@ -76,3 +76,28 @@ func TestDecodeErrorTypes(t *testing.T) {
 	}
 	providertest.RunErrorCases(t, "anthropic-messages", decodeError, cases)
 }
+
+// OpenRouter's Messages endpoint puts its metadata at the top level. The
+// first two bodies are verbatim from OpenRouter on 2026-10-15; the third is
+// constructed.
+func TestDecodeErrorOpenRouterUpstream(t *testing.T) {
+	const alibabaMessage = "<400> InternalError.Algo.InvalidParameter: The tool_choice parameter does not support being set to required or object in thinking mode"
+	cases := []providertest.ErrorCase{
+		{Name: "no provider reached", Status: 400,
+			Body: `{"type":"error","error":{"type":"invalid_request_error","message":"Expected temperature to be at most 2, received 50","error_type":"invalid_request"},"request_id":"gen-1792055641-LJ9gOVcgPY6jjVAUEQsq","metadata":{"provider_name":null}}`,
+			Want: sdk.APIError{Type: "invalid_request_error", Message: "Expected temperature to be at most 2, received 50",
+				RequestID: "gen-1792055641-LJ9gOVcgPY6jjVAUEQsq", Kind: sdk.KindUnknown}},
+		{Name: "upstream message already in message", Status: 400,
+			Body: `{"type":"error","error":{"type":"invalid_request_error","message":"<400> InternalError.Algo.InvalidParameter: The tool_choice parameter does not support being set to required or object in thinking mode","error_type":"invalid_request"},"request_id":"gen-1792055670-rWjJulPaod4C5NYsQekK","metadata":{"raw":"{\"error\":{\"message\":\"<400> InternalError.Algo.InvalidParameter: The tool_choice parameter does not support being set to required or object in thinking mode\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_parameter_error\"},\"id\":\"chatcmpl-4fa49dde-5456-4c31-be20-c7c1ab6ee0ed\",\"request_id\":\"4fa49dde-5456-4c31-be20-c7c1ab6ee0ed\"}","provider_name":"Alibaba","is_byok":false,"provider_error_code":"invalid_parameter_error"}}`,
+			Want: sdk.APIError{Type: "invalid_request_error", Message: alibabaMessage + " (Alibaba)",
+				RequestID: "gen-1792055670-rWjJulPaod4C5NYsQekK", Kind: sdk.KindUnknown}},
+		{Name: "generic message", Status: 422,
+			Body: `{"type":"error","error":{"type":"invalid_request_error","message":"Provider returned error"},"request_id":"gen-1","metadata":{"raw":"{\"error\":{\"message\":\"Input should be 'text'\",\"type\":\"invalid_request_error\"}}","provider_name":"DeepInfra"}}`,
+			Want: sdk.APIError{Type: "invalid_request_error", Message: "Provider returned error (DeepInfra: Input should be 'text')",
+				RequestID: "gen-1", Kind: sdk.KindUnknown}},
+		{Name: "garbage raw", Status: 400,
+			Body: `{"type":"error","error":{"type":"invalid_request_error","message":"Provider returned error"},"request_id":"gen-2","metadata":{"raw":"{not json","provider_name":"DeepInfra"}}`,
+			Want: sdk.APIError{Type: "invalid_request_error", Message: "Provider returned error", RequestID: "gen-2", Kind: sdk.KindUnknown}},
+	}
+	providertest.RunErrorCases(t, "anthropic-messages", decodeError, cases)
+}

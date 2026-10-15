@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 
+	"github.com/felinics/twilight/internal/errorformat"
 	"github.com/felinics/twilight/sdk"
 )
 
@@ -20,12 +21,16 @@ type errorBody struct {
 }
 
 // decodeError fills e from the Messages API error body. The request ID comes
-// from the request-id header, which the body repeats.
+// from the request-id header, which the body repeats. OpenRouter's Messages
+// endpoint adds a top-level metadata object; the upstream provider's failure
+// it relays is appended to the message, see
+// errorformat.AddOpenRouterUpstream.
 func decodeError(e *sdk.APIError) {
 	var body errorBody
 	_ = json.Unmarshal(e.Body, &body)
 	e.Type = body.Error.Type
 	e.Message = body.Error.Message
+	errorformat.AddOpenRouterUpstream(e)
 	e.RequestID = cmp.Or(e.Header.Get("request-id"), body.RequestID)
 	if k := kindFor(e.Type); k != sdk.KindUnknown {
 		e.Kind = k
