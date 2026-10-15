@@ -124,7 +124,7 @@ func TestPartsCodecRoundTripAndRejects(t *testing.T) {
 // replaces the unknown result in place.
 func TestRunFactsProjectEntries(t *testing.T) {
 	ctxState, surf, err := foldSteps(t, []step{
-		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), SubmittedAtUnixMilli: 1}},
+		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), Placement: PlacementNextTurn, SubmittedAtUnixMilli: 1}},
 		accepted("t1", "in-1"),
 		runStep("t1", turn.TurnStarted{Preset: ref.Ref{ID: "test", Digest: "sha256:test"}, TurnID: "t1"}),
 		completed("t1", "s1", "sha256:res"),
@@ -169,7 +169,7 @@ func TestRunFactsProjectEntries(t *testing.T) {
 	}
 
 	// Superseding twice, or a result outside the context, is a fold error.
-	if _, _, err := foldSteps(t, []step{step{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), SubmittedAtUnixMilli: 1}}, accepted("t1", "in-1"), runStep("t1", turn.TurnStarted{Preset: ref.Ref{ID: "test", Digest: "sha256:test"}, TurnID: "t1"}), completed("t1", "s1", "sha256:res"), opened("t1", "s1", "c1"),
+	if _, _, err := foldSteps(t, []step{step{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), Placement: PlacementNextTurn, SubmittedAtUnixMilli: 1}}, accepted("t1", "in-1"), runStep("t1", turn.TurnStarted{Preset: ref.Ref{ID: "test", Digest: "sha256:test"}, TurnID: "t1"}), completed("t1", "s1", "sha256:res"), opened("t1", "s1", "c1"),
 		runStep("t1", turn.ToolCallFailed{StepID: "s1/tools", CallID: "c1", Failure: turn.ToolFailure{Class: "x"}}),
 		{TypeToolResultSuperseded, ToolResultSupersededPayload{ToolResultID: "c1", Status: ToolError}},
 		{TypeToolResultSuperseded, ToolResultSupersededPayload{ToolResultID: "c1", Status: ToolError}}}); err == nil {
@@ -194,9 +194,9 @@ func TestRunFactsProjectEntries(t *testing.T) {
 func TestSurfaceAndContextFold(t *testing.T) {
 	content := jsonstable.MustParse(`{"text":"hi"}`)
 	steps := []step{
-		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: content, SubmittedAtUnixMilli: 1}},
-		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-2", Content: content, SubmittedAtUnixMilli: 2}},
-		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-3", Content: content, SubmittedAtUnixMilli: 3}},
+		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: content, Placement: PlacementNextTurn, SubmittedAtUnixMilli: 1}},
+		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-2", Content: content, Placement: PlacementNextTurn, SubmittedAtUnixMilli: 2}},
+		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-3", Content: content, Placement: PlacementNextTurn, SubmittedAtUnixMilli: 3}},
 		accepted("t1", "in-1"),
 		{TypeInputWithdrawn, InputWithdrawnPayload{InputID: "in-3", Reason: "user"}},
 		runStep("t1", turn.TurnStarted{Preset: ref.Ref{ID: "test", Digest: "sha256:test"}, TurnID: "t1"}),
@@ -242,7 +242,7 @@ func TestEventCodecCanonicalRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	samples := map[ledger.EventType]any{
-		TypeInputSubmitted:        InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), SubmittedAtUnixMilli: 1},
+		TypeInputSubmitted:        InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), Placement: PlacementNextTurn, SubmittedAtUnixMilli: 1},
 		TypeInputWithdrawn:        InputWithdrawnPayload{InputID: "in-1", Reason: "user"},
 		TypeInputRejected:         InputRejectedPayload{InputID: "in-1"},
 		TypeToolResultSuperseded:  ToolResultSupersededPayload{ToolResultID: "tr1", Status: ToolSuccess, OutputDigest: "sha256:out"},
@@ -255,10 +255,18 @@ func TestEventCodecCanonicalRoundTrip(t *testing.T) {
 		if !ok {
 			t.Fatalf("no sample for %s", def.Type)
 		}
-		if len(def.Codecs) != 1 {
-			t.Fatalf("%s: %d codecs, want one per schema this module writes", def.Type, len(def.Codecs))
+		wantVersion := Version
+		wantCodecs := 1
+		if def.Type == TypeInputSubmitted {
+			wantVersion = InputSubmittedVersion
+			wantCodecs = 2
 		}
-		codec := def.Codecs[Version]
+		if (def.Type == TypeInputSubmitted && def.Version != wantVersion) ||
+			(def.Type != TypeInputSubmitted && def.Version != 0 && def.Version != wantVersion) ||
+			len(def.Codecs) != wantCodecs || def.Codecs[wantVersion] == nil {
+			t.Fatalf("%s: version %d with %d codecs, want version %d with %d codecs", def.Type, def.Version, len(def.Codecs), wantVersion, wantCodecs)
+		}
+		codec := def.Codecs[wantVersion]
 		first, err := codec.Encode(val)
 		if err != nil {
 			t.Fatalf("%s: encode: %v", def.Type, err)
@@ -274,6 +282,11 @@ func TestEventCodecCanonicalRoundTrip(t *testing.T) {
 	}
 	// A success supersession names its body; an error one does not.
 	r := registry(t)
+	if _, err := r.Encode(TypeInputSubmitted, InputSubmittedPayload{
+		InputID: "in-2", Content: jsonstable.MustParse(`{"text":"hi"}`),
+	}); err == nil {
+		t.Fatal("input_submitted encoded without required placement")
+	}
 	for name, p := range map[string]ToolResultSupersededPayload{
 		"success without digest": {ToolResultID: "x", Status: ToolSuccess},
 		"error with digest":      {ToolResultID: "x", Status: ToolError, OutputDigest: "sha256:o"},
@@ -323,7 +336,7 @@ func (c *fakeContent) ToolResponse(ctx context.Context, d jsonstable.Digest) (tu
 // each digest once, and reports a lost body without touching the projection.
 func TestMaterialize(t *testing.T) {
 	ctxState, _, err := foldSteps(t, []step{
-		step{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), SubmittedAtUnixMilli: 1}}, accepted("t1", "in-1"), runStep("t1", turn.TurnStarted{Preset: ref.Ref{ID: "test", Digest: "sha256:test"}, TurnID: "t1"}),
+		step{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), Placement: PlacementNextTurn, SubmittedAtUnixMilli: 1}}, accepted("t1", "in-1"), runStep("t1", turn.TurnStarted{Preset: ref.Ref{ID: "test", Digest: "sha256:test"}, TurnID: "t1"}),
 		completed("t1", "s1", "sha256:res"),
 		opened("t1", "s1", "c1", "c2"),
 		runStep("t1", turn.ToolCallCompleted{StepID: "s1/tools", CallID: "c1", OutputDigest: "sha256:out"}),
@@ -422,11 +435,11 @@ func TestCompactionFold(t *testing.T) {
 	// 5 (summary), with a queued input that must survive compaction; the
 	// compaction itself lands at step 7.
 	prefix := []step{
-		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: content, SubmittedAtUnixMilli: 1}},
+		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: content, Placement: PlacementNextTurn, SubmittedAtUnixMilli: 1}},
 		accepted("t1", "in-1"),
 		runStep("t1", turn.TurnStarted{Preset: ref.Ref{ID: "test", Digest: "sha256:test"}, TurnID: "t1"}),
 		completed("t1", "s1", "sha256:one"),
-		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-q", Content: content, SubmittedAtUnixMilli: 2}},
+		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-q", Content: content, Placement: PlacementNextTurn, SubmittedAtUnixMilli: 2}},
 		{TypeSummary, SummaryPayload{Summary: sum}},
 	}
 	valid := mustCompaction(t, "ck1", at(4), base, sum, base[1:])
@@ -503,7 +516,7 @@ func TestCompactionFold(t *testing.T) {
 	t.Run("superseding a compacted result is rejected", func(t *testing.T) {
 		// The assistant's digest changes when its tool step opens, so the base
 		// is read back from a fold of the same prefix.
-		steps := []step{step{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), SubmittedAtUnixMilli: 1}}, accepted("t1", "in-1"), runStep("t1", turn.TurnStarted{Preset: ref.Ref{ID: "test", Digest: "sha256:test"}, TurnID: "t1"}), completed("t1", "ac", "sha256:call"), opened("t1", "ac", "c1"),
+		steps := []step{step{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), Placement: PlacementNextTurn, SubmittedAtUnixMilli: 1}}, accepted("t1", "in-1"), runStep("t1", turn.TurnStarted{Preset: ref.Ref{ID: "test", Digest: "sha256:test"}, TurnID: "t1"}), completed("t1", "ac", "sha256:call"), opened("t1", "ac", "c1"),
 			runStep("t1", turn.ToolCallCompleted{StepID: "ac/tools", CallID: "c1", OutputDigest: "sha256:out"})}
 		folded, _, err := foldSteps(t, steps)
 		if err != nil {

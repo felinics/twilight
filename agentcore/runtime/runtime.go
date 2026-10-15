@@ -39,6 +39,10 @@ type SessionRuntime struct {
 	chat   *chatlog.Commands
 	preset preset.PresetRef
 	newID  func() turn.TurnID
+	// advanceAfterRoute keeps a Turn-placement race in the same finite drive:
+	// once delivery observes that the active Turn settled, the replacement Turn
+	// may advance immediately after it is routed.
+	advanceAfterRoute bool
 }
 
 func New(cfg Config) (*SessionRuntime, error) {
@@ -61,7 +65,11 @@ func (r *SessionRuntime) ref(id turn.TurnID) sessionstore.TurnRef {
 }
 
 func (r *SessionRuntime) QueueInput(ctx context.Context, id turn.InputID, content turn.CanonicalJSON) (turn.AgentInput, error) {
-	return r.chat.Submit(ctx, r.w, id, content)
+	return r.QueueInputWithPlacement(ctx, id, content, chatlog.PlacementNextTurn)
+}
+
+func (r *SessionRuntime) QueueInputWithPlacement(ctx context.Context, id turn.InputID, content turn.CanonicalJSON, placement chatlog.Placement) (turn.AgentInput, error) {
+	return r.chat.SubmitWithPlacement(ctx, r.w, id, content, placement)
 }
 
 // DeliverInput explicitly targets a Turn; it never changes the placement of
@@ -86,6 +94,28 @@ func (r *SessionRuntime) Step(ctx context.Context) (driver.StepResult, error) {
 		return driver.StepResult{}, err
 	}
 	if active, ok := surface.Active(); ok {
+		chat, err := chatlog.ReadSurface(ctx, r.w.Projections(), r.w.SessionID())
+		if err != nil {
+			return driver.StepResult{}, err
+		}
+		var deliver []turn.AgentInput
+		for _, pending := range chat.SubmittedInputs() {
+			if pending.Placement == chatlog.PlacementTurn {
+				deliver = append(deliver, turn.AgentInput{ID: turn.InputID(pending.ID), Digest: pending.Digest})
+			}
+		}
+		if len(deliver) > 0 {
+			res, err := r.turns.Deliver(ctx, r.w, sessionkernel.DeliverRequest{Ref: r.ref(active.TurnID), Inputs: deliver})
+			if err != nil {
+				// The command may have durably stopped the Turn before rejecting
+				// delivery. Preserve the fall-forward policy for the next Step.
+				r.advanceAfterRoute = true
+				return driver.StepResult{}, err
+			}
+			if res.Status != turn.TurnActive {
+				r.advanceAfterRoute = true
+			}
+		}
 		return r.driver.Step(ctx, r.w, active.TurnID)
 	}
 	// A Session can have outstanding maintenance without any active Turn.
@@ -106,12 +136,26 @@ func (r *SessionRuntime) Step(ctx context.Context) (driver.StepResult, error) {
 	if len(pending) == 0 {
 		return driver.StepResult{Disposition: driver.Finished}, nil
 	}
-	inputs := make([]turn.AgentInput, len(pending))
-	for i, in := range pending {
-		inputs[i] = turn.AgentInput{ID: turn.InputID(in.ID), Digest: in.Digest}
+	inputs := make([]turn.AgentInput, 0, len(pending))
+	for _, in := range pending {
+		inputs = append(inputs, turn.AgentInput{ID: turn.InputID(in.ID), Digest: in.Digest})
 	}
-	_, err = r.turns.Start(ctx, r.w, sessionkernel.StartRequest{Ref: r.ref(r.newID()), Inputs: inputs, Preset: r.preset})
-	return driver.StepResult{Disposition: driver.Continue}, err
+	if len(inputs) == 0 {
+		return driver.StepResult{Disposition: driver.Finished}, nil
+	}
+	ref := r.ref(r.newID())
+	_, err = r.turns.Start(ctx, r.w, sessionkernel.StartRequest{Ref: ref, Inputs: inputs, Preset: r.preset})
+	if err != nil {
+		return driver.StepResult{}, err
+	}
+	if r.advanceAfterRoute {
+		r.advanceAfterRoute = false
+		return r.driver.Step(ctx, r.w, ref.TurnID)
+	}
+	// Starting a Turn is the routing boundary for this finite step. Leave model
+	// preparation to the next Step so a host time slice can yield after routing
+	// without unexpectedly dispatching external work.
+	return driver.StepResult{Disposition: driver.Continue}, nil
 }
 
 // Stop records the domain cancellation. Physical cancellation is recovered

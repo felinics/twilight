@@ -191,7 +191,7 @@ func (h *harness) submitInputs(inputs ...turn.AgentInput) {
 		h.mustApply(writer.SemanticGroup{CommitID: ledger.CommitID(fmt.Sprintf("submitted/%s/%d", in.ID, h.seq)),
 			Batches: []writer.TypedBatch{{Domain: chatlog.Stream, Events: []writer.TypedEvent{{
 				Type: chatlog.TypeInputSubmitted, RecordedAtUnixMilli: 1,
-				Value: chatlog.InputSubmittedPayload{InputID: chatlog.InputID(in.ID), Content: inputContent(in.ID), SubmittedAtUnixMilli: 1}}}}}})
+				Value: chatlog.InputSubmittedPayload{InputID: chatlog.InputID(in.ID), Content: inputContent(in.ID), Placement: chatlog.PlacementNextTurn, SubmittedAtUnixMilli: 1}}}}}})
 	}
 }
 

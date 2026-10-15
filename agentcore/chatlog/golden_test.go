@@ -22,7 +22,7 @@ func freezeChatlog(t *testing.T, name, got, want string) {
 }
 
 // TestChatlogWireGolden freezes the compaction digest preimages and one
-// registry-encoded payload of payload version 1.
+// registry-encoded submission, including its durable placement.
 func TestChatlogWireGolden(t *testing.T) {
 	pairs := []chatlog.EntryDigestPair{
 		{Kind: chatlog.EntryInput, ID: "in-1", Digest: "sha256:aa"},
@@ -66,10 +66,41 @@ func TestChatlogWireGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	wire, err := reg.Encode(chatlog.TypeInputSubmitted, chatlog.InputSubmittedPayload{
-		InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), SubmittedAtUnixMilli: 1,
+		InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), Placement: chatlog.PlacementNextTurn, SubmittedAtUnixMilli: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	freezeChatlog(t, "input_submitted wire", wire.String(), `{"content":{"text":"hi"},"inputId":"in-1","submittedAtUnixMilli":1,"v":1}`)
+	freezeChatlog(t, "input_submitted wire", wire.String(), `{"content":{"text":"hi"},"inputId":"in-1","placement":"next_turn","submittedAtUnixMilli":1,"v":2}`)
+	legacy, err := reg.Decode(ledger.Event{Type: chatlog.TypeInputSubmitted,
+		Payload: jsonstable.MustParse(`{"content":{"text":"hi"},"inputId":"old","submittedAtUnixMilli":1,"v":1}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Unknown || legacy.Version != 1 {
+		t.Fatalf("input_submitted v1 was not decoded: value=%#v, unknown=%v, version=%d", legacy.Value, legacy.Unknown, legacy.Version)
+	}
+	for _, projection := range []module.ProjectionDefinition{chatlog.SurfaceProjection, chatlog.ContextProjection} {
+		state, err := projection.Initial()
+		if err != nil {
+			t.Fatal(err)
+		}
+		state, err = projection.Apply(state, legacy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var input chatlog.Input
+		switch folded := state.(type) {
+		case chatlog.Surface:
+			input = folded.SubmittedInputs()[0]
+		case chatlog.Context:
+			input = folded.Pending["old"]
+		}
+		if input.Placement != chatlog.PlacementNextTurn {
+			t.Fatalf("legacy placement = %q", input.Placement)
+		}
+	}
+	if (chatlog.Input{}).Placement.Effective() != chatlog.PlacementNextTurn {
+		t.Fatal("old checkpoint input lost next-turn delivery")
+	}
 }

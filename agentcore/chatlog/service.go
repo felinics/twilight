@@ -33,29 +33,54 @@ type Guard func(v writer.View) error
 // submitted state.
 var ErrNotSubmitted = errors.New("chatlog: input is not submitted")
 
+// ErrInputConflict reports reuse of an InputID with different content.
+var ErrInputConflict = errors.New("chatlog: input id reused for different content")
+
 // Submit records one user input as submitted: content is the
 // input's body, opaque to this module and digested as given (the agent decides its shape). Idempotency rides on the CommitID, so a
 // retried submission replays.
 func (s *Commands) Submit(ctx context.Context, w writer.Writer, id turn.InputID, content turn.CanonicalJSON) (turn.AgentInput, error) {
+	return s.SubmitWithPlacement(ctx, w, id, content, PlacementNextTurn)
+}
+
+// SubmitWithPlacement records one user input with its delivery placement.
+func (s *Commands) SubmitWithPlacement(ctx context.Context, w writer.Writer, id turn.InputID, content turn.CanonicalJSON, placement Placement) (turn.AgentInput, error) {
 	if content.IsZero() {
 		return turn.AgentInput{}, errors.New("chatlog: submit requires input content")
+	}
+	if !placement.Valid() {
+		return turn.AgentInput{}, errors.New("chatlog: invalid input placement")
 	}
 	digest, err := DigestInput(InputID(id), content)
 	if err != nil {
 		return turn.AgentInput{}, err
 	}
-	res, err := w.Commit(ctx, func(writer.View) (*writer.SemanticGroup, error) {
+	res, err := w.Commit(ctx, func(v writer.View) (*writer.SemanticGroup, error) {
+		state, err := v.Projection(SurfaceProjectionID, SurfaceProjection.Version)
+		if err != nil {
+			return nil, err
+		}
+		surface, ok := state.(Surface)
+		if !ok {
+			return nil, fmt.Errorf("chatlog: surface projection is %T", state)
+		}
+		if existing, ok := surface.Inputs.Get(InputID(id)); ok {
+			if existing.Input.Digest != digest || existing.Input.Placement.Effective() != placement {
+				return nil, fmt.Errorf("%w: %s", ErrInputConflict, id)
+			}
+			return nil, nil
+		}
 		return &writer.SemanticGroup{CommitID: ledger.CommitID("input-submitted/" + string(id)),
 			Batches: []writer.TypedBatch{{Domain: Stream, Events: []writer.TypedEvent{{
 				Type: TypeInputSubmitted, RecordedAtUnixMilli: s.Now().UnixMilli(),
-				Value: InputSubmittedPayload{InputID: InputID(id), Content: content, SubmittedAtUnixMilli: s.Now().UnixMilli()},
+				Value: InputSubmittedPayload{InputID: InputID(id), Content: content, Placement: placement, SubmittedAtUnixMilli: s.Now().UnixMilli()},
 			}}}}}, nil
 	})
 	if err != nil {
 		return turn.AgentInput{}, err
 	}
 	switch res.Outcome {
-	case writer.CommitApplied, writer.CommitAlreadyApplied:
+	case writer.CommitApplied, writer.CommitAlreadyApplied, writer.CommitNoop:
 		return turn.AgentInput{ID: id, Digest: digest}, nil
 	default:
 		return turn.AgentInput{}, fmt.Errorf("chatlog: submit input: %s: %s", res.Outcome, res.Detail)

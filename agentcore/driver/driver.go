@@ -33,6 +33,35 @@ type StepResult struct {
 	Dispatched  []effect.AssignmentKey
 }
 
+// RecoverInterrupted applies the execution policy to every executing target
+// in the Session before a host starts driving it. Recovery is deliberately a
+// finite operation: it records only durable recovery commands and leaves the
+// caller to schedule subsequent Step calls.
+func (d *Driver) RecoverInterrupted(ctx context.Context, w writer.Writer) (int, error) {
+	if d == nil || d.TurnStore == nil || d.Loops == nil {
+		return 0, errors.New("driver: recovery requires a configured turn store and loops")
+	}
+	if w == nil {
+		return 0, errors.New("driver: recovery requires a writer")
+	}
+	st := d.TurnStore.Bind(w)
+	rec := &reconcile.Reconciler{
+		Executions:      d.Loops.Executor,
+		Missing:         d.MissingEffects,
+		Attempts:        d.Redispatches,
+		Epoch:           w.Epoch(),
+		MaxRedispatches: d.MaxRedispatches,
+		Redispatch: func(ctx context.Context, key effect.AssignmentKey) error {
+			lp, err := d.Loops.ForTurn(ctx, w, turn.TurnID(key.OwnerID))
+			if err != nil {
+				return err
+			}
+			return lp.Redispatch(ctx, st, key)
+		},
+	}
+	return d.TurnStore.RecoverInterrupted(ctx, w, rec)
+}
+
 // Driver interprets durable Session state for a finite interval. It never
 // awaits an external execution, starts a background continuation, acquires
 // ownership, or retains the caller's Writer after a method returns.

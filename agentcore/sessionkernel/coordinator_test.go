@@ -51,7 +51,7 @@ func TestCoordinatorCommitsWithoutDriver(t *testing.T) {
 			return &writer.SemanticGroup{CommitID: ledger.CommitID("submit/" + string(id)),
 				Batches: []writer.TypedBatch{{Domain: chatlog.Stream, Events: []writer.TypedEvent{{
 					Type: chatlog.TypeInputSubmitted, RecordedAtUnixMilli: 1,
-					Value: chatlog.InputSubmittedPayload{InputID: id, Content: content, SubmittedAtUnixMilli: 1},
+					Value: chatlog.InputSubmittedPayload{InputID: id, Content: content, Placement: chatlog.PlacementNextTurn, SubmittedAtUnixMilli: 1},
 				}}}}}, nil
 		}); err != nil {
 			t.Fatal(err)

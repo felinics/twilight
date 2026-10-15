@@ -164,6 +164,48 @@ func (c *Coordinator) Deliver(ctx context.Context, w writer.Writer, req DeliverR
 	return c.respond(ctx, req.Ref)
 }
 
+// Respond commits a response command for a waiting external or approval call.
+// The command identity is derived from the response request, so answering a
+// request is idempotent and a retry cannot accidentally answer another call.
+// It is kept off Commands because response answering is a host-side drive
+// operation rather than a Session lifecycle primitive.
+
+func (c *Coordinator) Respond(ctx context.Context, w writer.Writer, req turn.ResponseRequest, cmd turn.AgentCommand) (TurnResult, error) {
+	if w == nil {
+		return TurnResult{}, errors.New("sessionkernel: response requires the session's writer")
+	}
+	if err := owned(w, sessionstore.TurnRef{SessionID: w.SessionID(), TurnID: req.TurnID}); err != nil {
+		return TurnResult{}, err
+	}
+	var id turn.CommandID
+	switch v := cmd.(type) {
+	case turn.SubmitToolResponse:
+		if v.StepID != req.StepID || v.CallID != req.CallID || v.ResponseID != req.ID {
+			return TurnResult{}, fmt.Errorf("sessionkernel: response identity does not match request")
+		}
+		id = schema.Identity().DeriveResponseCommandID(req.TurnID, req.StepID, req.CallID, req.ID)
+	case turn.RejectToolCall:
+		if v.StepID != req.StepID || v.CallID != req.CallID || v.ResponseID != req.ID {
+			return TurnResult{}, fmt.Errorf("sessionkernel: response identity does not match request")
+		}
+		id = schema.Identity().DeriveResponseCommandID(req.TurnID, req.StepID, req.CallID, req.ID)
+	default:
+		return TurnResult{}, fmt.Errorf("sessionkernel: unsupported response command %T", cmd)
+	}
+	env, err := schema.Wire().Envelope(req.TurnID, id, cmd)
+	if err != nil {
+		return TurnResult{}, err
+	}
+	part, err := c.TurnStore.Command(ctx, store.CommitRequest{Command: env})
+	if err != nil {
+		return TurnResult{}, err
+	}
+	if err := c.commit(ctx, w, "respond", unit.Work{CommitID: ledger.CommitID(env.ID), Parts: []unit.Part{part}}); err != nil && !errors.Is(err, turn.ErrTurnTerminal) {
+		return TurnResult{}, err
+	}
+	return c.respond(ctx, sessionstore.TurnRef{SessionID: w.SessionID(), TurnID: req.TurnID})
+}
+
 // Stop commits cancellation dispositions and TurnEnded as one transition.
 // CancelTurn rebases on the latest state inside the Writer transaction.
 func (c *Coordinator) Stop(ctx context.Context, w writer.Writer, req StopRequest) (TurnResult, error) {

@@ -97,6 +97,33 @@ one Writer transaction. Replaying a delivery with the same IDs but different
 content is a conflict. Chatlog derives its delivered status from `InputAccepted`;
 there is no separate durable delivery event.
 
+Inputs carry a Session-level delivery placement, not a target TurnID:
+
+- `turn`: prefer the active Turn's next model request; if it has ended or none
+  exists, use a subsequent Turn.
+- `next_turn`: leave the active Turn alone and wait for a subsequent Turn; an
+  idle Session can start one immediately.
+
+Admission persists the content and placement under a stable InputID. Success
+means accepted, not delivered or model execution completed. Reusing the ID with
+other content or placement is a conflict. Routing atomically couples the Run's
+input acceptance with Chatlog delivery, so an input is consumed at most once.
+It does not cancel a model request or tool execution already in flight. Several
+pending inputs may be delivered together, in submission order.
+
+The Session runtime routes from these persisted facts during Advance/Resume,
+including after reopening. The application accepts both in-process submissions
+and Inbox `submit` commands through the same operation. Inbox resolution does
+not replace the Chatlog queue; owners also check accepted inputs on open and
+on their Inbox polls. Automatic discovery after a crashed owner relies on the
+configured finite leases and activation scan. Explicitly closed Sessions need
+another activation or Open; released leases are not expired-lease candidates.
+
+Submission payload version 2 records explicit placement. This pre-release
+format is intentionally breaking: v1 submission facts and v1 projection
+snapshots are not readable by this version. Strict named-Turn delivery and
+idle-only starts remain separate low-level primitives.
+
 ### Turn
 
 A Turn is one logical agent execution with a stable TurnID. It owns its

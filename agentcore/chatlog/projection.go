@@ -116,7 +116,7 @@ var chatlogConsumes = func() []ledger.EventType {
 }()
 
 var SurfaceProjection = module.ProjectionDefinition{
-	ID: SurfaceProjectionID, Version: 1,
+	ID: SurfaceProjectionID, Version: 2,
 	Consumes: chatlogConsumes,
 	// Assistant and tool_result entries are projected from Turn facts
 	// whose domain defaults preserve conversation content across a fork.
@@ -149,7 +149,7 @@ func applySurface(state any, e module.DecodedEvent) (any, error) { //nolint:gocr
 		if err != nil {
 			return nil, err
 		}
-		s.Inputs = s.Inputs.Set(p.InputID, InputView{Input: Input{ID: p.InputID, Content: p.Content, Digest: d}, Status: InputSubmitted, Position: pos})
+		s.Inputs = s.Inputs.Set(p.InputID, InputView{Input: Input{ID: p.InputID, Content: p.Content, Digest: d, Placement: p.Placement.Effective()}, Status: InputSubmitted, Position: pos})
 	case InputWithdrawnPayload:
 		if err := terminateInput(&s, p.InputID, InputWithdrawn); err != nil {
 			return nil, err
@@ -400,7 +400,7 @@ type Context struct {
 }
 
 var ContextProjection = module.ProjectionDefinition{
-	ID: ContextProjectionID, Version: 1,
+	ID: ContextProjectionID, Version: 2,
 	Consumes:          chatlogConsumes,
 	RequiredForCommit: true,
 	Initial: func() (any, error) {
@@ -428,7 +428,7 @@ func applyContext(state any, e module.DecodedEvent) (any, error) { //nolint:gocr
 			return nil, err
 		}
 		c.Pending = cow(c.Pending)
-		c.Pending[p.InputID] = Input{ID: p.InputID, Content: p.Content, Digest: d}
+		c.Pending[p.InputID] = Input{ID: p.InputID, Content: p.Content, Digest: d, Placement: p.Placement.Effective()}
 	case InputWithdrawnPayload:
 		c.Pending = cow(c.Pending)
 		delete(c.Pending, p.InputID)

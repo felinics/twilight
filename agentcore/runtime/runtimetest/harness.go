@@ -164,7 +164,7 @@ func (h *harness) submit(ids ...string) []turn.AgentInput {
 		h.mustApply(writer.SemanticGroup{CommitID: ledger.CommitID("submitted/" + id),
 			Batches: []writer.TypedBatch{{Domain: chatlog.Stream, Events: []writer.TypedEvent{{
 				Type: chatlog.TypeInputSubmitted, RecordedAtUnixMilli: h.now,
-				Value: chatlog.InputSubmittedPayload{InputID: chatlog.InputID(id), Content: inputContent(id), SubmittedAtUnixMilli: h.now}}}}}})
+				Value: chatlog.InputSubmittedPayload{InputID: chatlog.InputID(id), Content: inputContent(id), Placement: chatlog.PlacementNextTurn, SubmittedAtUnixMilli: h.now}}}}}})
 		out[i] = in
 	}
 	return out

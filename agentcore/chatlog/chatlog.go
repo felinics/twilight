@@ -185,11 +185,31 @@ const (
 	SourceToolResponse ToolResultSource = "tool_response"
 )
 
+// Placement is when a Session should deliver an input, not a target TurnID.
+type Placement string
+
+const (
+	PlacementTurn     Placement = "turn"
+	PlacementNextTurn Placement = "next_turn"
+)
+
+func (p Placement) Valid() bool { return p == PlacementTurn || p == PlacementNextTurn }
+
+// Effective preserves next-turn delivery for old events and checkpoints that
+// predate placement. New submissions must specify a valid placement.
+func (p Placement) Effective() Placement {
+	if p == "" {
+		return PlacementNextTurn
+	}
+	return p
+}
+
 type Input struct {
-	ID      InputID           `json:"id"`
-	TurnID  TurnID            `json:"turnId,omitempty"`
-	Content jsonstable.Value  `json:"content"`
-	Digest  jsonstable.Digest `json:"digest"`
+	ID        InputID           `json:"id"`
+	TurnID    TurnID            `json:"turnId,omitempty"`
+	Content   jsonstable.Value  `json:"content"`
+	Digest    jsonstable.Digest `json:"digest"`
+	Placement Placement         `json:"placement,omitempty"`
 }
 
 // Assistant is the structural projection of one ModelStepCompleted
@@ -338,6 +358,7 @@ func digestDomain(domain string, body any) (jsonstable.Digest, error) {
 type InputSubmittedPayload struct {
 	InputID              InputID          `json:"inputId"`
 	Content              jsonstable.Value `json:"content"`
+	Placement            Placement        `json:"placement,omitempty"`
 	SubmittedAtUnixMilli int64            `json:"submittedAtUnixMilli"`
 }
 
@@ -493,8 +514,11 @@ var supersededBinding = module.BindingReferenceDefinition{
 // Session, of session lineage, so a fork continues its parent's conversation.
 const StreamDomain = "chatlog"
 
-// Version is the payload version the chatlog writes every event with
-// older versions keep their codecs beside it.
+// InputSubmittedVersion is the first chatlog payload version that requires
+// an explicit input placement.
+const InputSubmittedVersion module.PayloadVersion = 2
+
+// Version is the baseline payload version for chatlog events.
 const Version module.PayloadVersion = 1
 
 var streamDefinition = module.StreamDefinition{Domain: StreamDomain, Inheritance: module.Inherited}
@@ -506,6 +530,27 @@ func def[T any](typ ledger.EventType, check func(*T) error, bindings ...module.B
 	return module.EventDefinition{Type: typ, Domain: StreamDomain,
 		Codecs:   map[module.PayloadVersion]module.PayloadCodec{Version: module.JSONCodec[T]{Check: check}},
 		Bindings: bindings}
+}
+
+func inputSubmittedDefinition() module.EventDefinition {
+	check := func(p *InputSubmittedPayload) error {
+		if p.InputID == "" || p.Content.IsZero() {
+			return errors.New("input_submitted requires inputId and content")
+		}
+		if p.Placement != "" && !p.Placement.Valid() {
+			return fmt.Errorf("input_submitted has invalid placement %q", p.Placement)
+		}
+		return nil
+	}
+	d := def[InputSubmittedPayload](TypeInputSubmitted, check)
+	d.Version = InputSubmittedVersion
+	d.Codecs[InputSubmittedVersion] = module.JSONCodec[InputSubmittedPayload]{Check: func(p *InputSubmittedPayload) error {
+		if !p.Placement.Valid() {
+			return errors.New("input_submitted v2 requires placement turn or next_turn")
+		}
+		return check(p)
+	}}
+	return d
 }
 
 // consumedTurnFacts are the Turn facts the chatlog projections fold
@@ -529,12 +574,7 @@ var Module = module.ModuleDescriptor{
 	Streams:  []module.StreamDefinition{streamDefinition},
 	Requires: []module.ModuleRequirement{turnRequirement()},
 	Events: []module.EventDefinition{
-		def[InputSubmittedPayload](TypeInputSubmitted, func(p *InputSubmittedPayload) error {
-			if p.InputID == "" || p.Content.IsZero() {
-				return errors.New("input_submitted requires inputId and content")
-			}
-			return nil
-		}),
+		inputSubmittedDefinition(),
 		def[InputWithdrawnPayload](TypeInputWithdrawn, nil),
 		def[InputRejectedPayload](TypeInputRejected, nil),
 		def[ToolResultSupersededPayload](TypeToolResultSuperseded, checkSuperseded, supersededBinding),
