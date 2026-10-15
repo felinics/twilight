@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1492,6 +1493,66 @@ func TestListModels(t *testing.T) {
 	}
 	if models[0].ID != "gpt-4o" {
 		t.Errorf("expected first model 'gpt-4o', got %q", models[0].ID)
+	}
+	for _, m := range models {
+		if !reflect.DeepEqual(m, sdk.Model{ID: m.ID, Provider: p}) {
+			t.Errorf("OpenAI model %q carries metadata it does not report: %#v", m.ID, m)
+		}
+	}
+}
+
+// openRouterModelsResponse is a trimmed OpenRouter GET /models response.
+const openRouterModelsResponse = `{"data":[{
+	"id":"deepseek/deepseek-v4.1-flash","canonical_slug":"deepseek/deepseek-v4.1-flash",
+	"name":"DeepSeek: DeepSeek V4.1 Flash","created":1789000000,
+	"description":"DeepSeek V4.1 Flash.","context_length":1048576,
+	"architecture":{"modality":"text+image->text","input_modalities":["text","image"],
+		"output_modalities":["text"],"tokenizer":"DeepSeek","instruct_type":null},
+	"pricing":{"prompt":"0.0000001","completion":"0.0000004"},
+	"top_provider":{"context_length":1048576,"max_completion_tokens":943718,"is_moderated":false},
+	"per_request_limits":null,
+	"supported_parameters":["include_reasoning","max_tokens","reasoning","reasoning_effort",
+		"response_format","structured_outputs","temperature","tool_choice","tools"],
+	"reasoning":{"mandatory":false,"default_enabled":true,
+		"supported_efforts":["max","high","low"],"default_effort":"high"},
+	"default_parameters":{}
+}],"total_count":1,"links":{"next":null}}`
+
+func TestListModels_OpenRouterMetadata(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(openRouterModelsResponse))
+	}))
+	defer srv.Close()
+
+	p := responses.New(responses.WithAPIKey("test-key"), responses.WithBaseURL(srv.URL))
+	models, err := p.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels failed: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("expected 1 model, got %d", len(models))
+	}
+	enabled := true
+	want := sdk.Model{
+		ID:               "deepseek/deepseek-v4.1-flash",
+		DisplayName:      "DeepSeek: DeepSeek V4.1 Flash",
+		Provider:         p,
+		Description:      "DeepSeek V4.1 Flash.",
+		Modalities:       sdk.Modalities{Input: []sdk.Modality{sdk.ModalityText, sdk.ModalityImage}, Output: []sdk.Modality{sdk.ModalityText}},
+		ContextWindow:    1048576,
+		MaxOutputTokens:  943718,
+		ToolCall:         true,
+		StructuredOutput: true,
+		Reasoning: &sdk.ModelReasoning{
+			Efforts: []string{sdk.ReasoningEffortLow, sdk.ReasoningEffortHigh, sdk.ReasoningEffortMax},
+			Off:     sdk.ReasoningOffAccepted,
+			Dialect: sdk.ReasoningDialectTier,
+			Default: &sdk.ReasoningDefault{Enabled: &enabled, Effort: sdk.ReasoningEffortHigh},
+		},
+	}
+	if !reflect.DeepEqual(models[0], want) {
+		t.Errorf("model:\n got %#v\nwant %#v", models[0], want)
 	}
 }
 
