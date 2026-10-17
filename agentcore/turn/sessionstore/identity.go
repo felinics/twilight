@@ -14,7 +14,10 @@ func digestOf(domain string, parts ...string) jsonstable.Digest {
 
 // PlanDigest identifies the immutable Turn start intent.
 func PlanDigest(id turn.TurnID, preset ref.Ref, inputs []turn.AgentInput) jsonstable.Digest {
-	parts := []string{string(id), string(preset.ID), string(preset.Digest)}
+	parts := make([]string, 3, 3+2*len(inputs))
+	parts[0] = string(id)
+	parts[1] = string(preset.ID)
+	parts[2] = string(preset.Digest)
 	for _, input := range inputs {
 		parts = append(parts, string(input.ID), string(input.Digest))
 	}

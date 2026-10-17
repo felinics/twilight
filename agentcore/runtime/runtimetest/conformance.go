@@ -34,9 +34,10 @@ func Run(t *testing.T, factory Factory) {
 }
 
 const (
-	typeCreated  = sessionstore.Prefix + "turn_started"
-	typeAccepted = sessionstore.Prefix + "input_accepted"
-	typeEnded    = sessionstore.Prefix + "turn_ended"
+	typeCreated   = sessionstore.Prefix + "turn_started"
+	typeAccepted  = sessionstore.Prefix + "input_accepted"
+	typeEnded     = sessionstore.Prefix + "turn_ended"
+	changedDigest = "sha256:changed"
 )
 
 // --- Start -----------------------------
@@ -48,7 +49,7 @@ func testStart(t *testing.T, factory Factory) {
 
 	// every rejection leaves the ledger untouched.
 	altered := input("in-1")
-	altered.Digest = "sha256:changed"
+	altered.Digest = changedDigest
 	rejects := []struct {
 		name     string
 		req      sessionkernel.StartRequest
@@ -117,7 +118,7 @@ func testStart(t *testing.T, factory Factory) {
 	changedPreset := h.startRequest("t1", submitted...)
 	changedPreset.Preset.ID = "another-preset"
 	changedInputs := append([]turn.AgentInput(nil), submitted...)
-	changedInputs[0].Digest = "sha256:changed"
+	changedInputs[0].Digest = changedDigest
 	for _, req := range []sessionkernel.StartRequest{changedPreset, h.startRequest("t1", changedInputs...)} {
 		if _, err := h.c.Start(h.ctx, h.writer(), req); !errors.Is(err, turn.ErrConflict) || h.head() != after {
 			t.Fatalf("changed start replay: err=%v moved=%v", err, h.head() != after)
@@ -176,7 +177,7 @@ func testDeliver(t *testing.T, factory Factory) {
 	}
 
 	changed := append([]turn.AgentInput(nil), in2...)
-	changed[0].Digest = "sha256:changed"
+	changed[0].Digest = changedDigest
 	if _, err := h.c.Deliver(h.ctx, h.writer(), sessionkernel.DeliverRequest{Ref: h.ref("t1"), Inputs: changed}); !errors.Is(err, turn.ErrConflict) || h.head() != head {
 		t.Fatalf("changed delivery replay: err=%v moved=%v", err, h.head() != head)
 	}
@@ -276,7 +277,11 @@ func testStop(t *testing.T, factory Factory) {
 	if !sameTypes(group, typeEnded) {
 		t.Fatalf("stop facts = %v", eventTypes(group))
 	}
-	ended := decode[sessionstore.Event](t, h.registry, &group[0]).Fact.(turn.TurnEnded)
+	decoded := decode[sessionstore.Event](t, h.registry, &group[0])
+	ended, ok := decoded.Fact.(turn.TurnEnded)
+	if !ok {
+		t.Fatalf("stop event = %T, want turn.TurnEnded", decoded.Fact)
+	}
 	stopped, ok := ended.End.(turn.TurnStoppedEnd)
 	if !ok || stopped.Message != "user" {
 		t.Fatalf("stop outcome = %+v", ended)

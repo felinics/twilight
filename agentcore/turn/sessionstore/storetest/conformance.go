@@ -408,8 +408,8 @@ func asStrings(types []ledger.EventType) []string {
 func testAdmission(t *testing.T, factory Factory) {
 	h := newHarness(t, factory(t))
 	h.startTurn("r1", input("in-1"))
-	ref := artifact.Ref{Scheme: "cas", Authority: "local", Key: "k1", Durability: artifact.EventBound, Integrity: &artifact.Integrity{Algorithm: "sha256", Value: "x"}}
-	binding, err := artifact.NewBinding("b1", ref)
+	artifactRef := artifact.Ref{Scheme: "cas", Authority: "local", Key: "k1", Durability: artifact.EventBound, Integrity: &artifact.Integrity{Algorithm: "sha256", Value: "x"}}
+	binding, err := artifact.NewBinding("b1", artifactRef)
 	if err != nil {
 		t.Fatal(err)
 	}
