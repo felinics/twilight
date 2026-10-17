@@ -5,7 +5,7 @@ Twilight is a carefully engineered, highly customizable agent built on a deploym
 
 ## Goal
 
-Building an agent involves more than invoking models and tools. A practical agent needs a consistent execution model for sessions, runs, effects, storage, recovery, and interaction with external systems.
+Building an agent involves more than invoking models and tools. A practical agent needs a consistent execution model for sessions, turns, effects, storage, recovery, and interaction with external systems.
 
 These concerns are often tightly coupled to a particular runtime or deployment environment, causing local and cloud agents to diverge into separate implementations.
 
@@ -31,7 +31,7 @@ This gives the execution model a durable history and makes recovery, replay, ins
 The core model is expressed through a small set of abstractions:
 
 - **Session** — the long-lived semantic boundary of an agent interaction.
-- **Run** — the state machine that describes the progression of an agent execution.
+- **Turn** — one logical agent execution, owning its preset, inputs, state machine, and event history.
 - **Effect** — an explicit description of work that must be performed outside the semantic state machine.
 - **Execution** — the lifecycle and physical execution of an effect.
 - **Outcome** — the observed result of an execution returned to the semantic layer.

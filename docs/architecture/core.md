@@ -1,17 +1,17 @@
 # Agent Core
 
 Agent Core defines Twilight's durable execution model. It owns session history,
-run state, effect lifecycle, persistence, fencing, and recovery semantics.
+turn state, effect lifecycle, persistence, fencing, and recovery semantics.
 
 ## Semantic flow
 
-An Input is committed to a Session's chatlog. A Turn associates the input
-with a preset and a Run.
+An Input is committed to a Session's chatlog. A Turn accepts submitted inputs
+under an immutable preset and owns the complete agent loop.
 
-The Run loop reads the current Run state, derives the next command, and commits
+The Turn loop reads the current Turn state, derives the next command, and commits
 its protocol transition. When the transition requires external work, the
 execution boundary handles that work and returns an Outcome. The loop commits
-the outcome and continues the Run.
+the outcome and continues the Turn.
 
 Session projections expose the resulting state without requiring a write
 capability.
@@ -44,7 +44,7 @@ and applies projection updates. It neither acquires nor renews ownership;
 closing a Writer flushes local state without releasing the handle.
 
 The read path uses projections and query surfaces. Reads can inspect session,
-turn, run, and chatlog state without acquiring a write capability.
+turn and chatlog state without acquiring a write capability.
 
 CQRS is a logical separation in Agent Core. The write and read paths may share
 an implementation while retaining independent responsibilities.
@@ -75,47 +75,49 @@ history unless their protocol commits them as facts.
 ### Session
 
 A Session is the durable boundary of one interaction. Its history contains the
-inputs, turns, runs, compaction operations, and other module-owned facts
+inputs, turns, compaction operations, and other module-owned facts
 associated with that interaction.
 
 `writer.Factory.Bind` builds a Writer over an acquired Session handle.
 Reads use projections and do not require ownership. A Writer commits under
-its handle's epoch. Session identity, Run state, and recorded effects remain
+its handle's epoch. Session identity, Turn state, and recorded effects remain
 durable independently of any open handle.
 
 ### Input
 
-An Input is a durable entry in the session chatlog. A Turn references the input
-IDs used to construct its request.
+An Input is a durable entry in the session chatlog. Its lifecycle separates
+submission, acceptance, and consumption:
+
+1. Chatlog records the content as `InputSubmitted`.
+2. The Turn records `InputAccepted` with the input ID and content digest.
+3. `ModelStepPrepared` records which accepted inputs the request consumes.
+
+Start and delivery validate the submitted content and accept the inputs within
+one Writer transaction. Replaying a delivery with the same IDs but different
+content is a conflict. Chatlog derives its delivered status from `InputAccepted`;
+there is no separate durable delivery event.
 
 ### Turn
 
-A Turn is one user-visible unit of progress. It associates inputs with a
-preset and a Run. The Turn surface combines Turn facts with the state of its
-Run and settles as completed, failed, stopped, or superseded.
+A Turn is one logical agent execution with a stable TurnID. It owns its
+immutable preset reference, accepted inputs, logical steps, effect lifecycle,
+recovery state, and terminal result. Its complete history is recorded as Turn
+facts and folded by the deterministic `Decide/Evolve` state machine.
 
-The Turn module owns Turn lifecycle facts. The Run module owns Run lifecycle
-facts.
+A Turn starts once with `TurnStarted` and ends once with `TurnEnded`, whose
+result is completed, failed, or stopped. The conversation-facing Turn surface
+and the execution machine are projections of these same authoritative facts.
 
-### Run
+Process restart, Session takeover, Worker replacement, and execution recovery
+continue the same Turn. They do not create another logical execution identity.
+Physical attempts belong to the executor's Execution model.
 
-A Run is the logical execution history of a Turn. It is a versioned state
-machine with stable identities and deterministic transitions.
-
-A Run records:
-
-- the active logical step;
-- model and tool effects;
-- effect requests and settlements;
-- recovery state;
-- the terminal Run state.
-
-Run identity and canonicalization rules are bound to the schema version that
-created the Run. Replays use those rules.
+Turn identity and canonicalization rules are bound to the schema version that
+created the Turn. Replays use those rules.
 
 ### Step
 
-A Step represents logical progress inside a Run. The current implementation
+A Step represents logical progress inside a Turn. The current implementation
 uses model steps and tool steps.
 
 A Step may produce one or more physical execution attempts when its effect is
@@ -125,7 +127,7 @@ recovered and replay is permitted.
 
 An Effect is a request for external work. Model calls and tool calls are
 represented as effects. The owning protocol assigns each effect a stable
-identity and records its lifecycle: a Run for conversation steps, or a Session
+identity and records its lifecycle: a Turn for conversation steps, or a Session
 compaction operation for a context-maintenance summary.
 
 ### Execution
@@ -147,8 +149,8 @@ observation. An interrupted request therefore keeps its settlement unresolved.
 
 ### Wait
 
-A Wait records an external response required by a tool call. The Run remains
-active while waiting. The response is committed before the Run continues.
+A Wait records an external response required by a tool call. The Turn remains
+active while waiting. The response is committed before the Turn continues.
 
 ### Artifact
 
@@ -156,41 +158,48 @@ Facts reference large or immutable bodies through artifact identities. The
 content store retains those bodies, and the binding and retention stores keep
 the references valid across restarts and forks.
 
-## Run loop
+## Turn loop
 
-`agentcore/run/loop` is the Run decision interpreter. The RunStore remains the
-source of authority. Each operation loads the Run, derives the next plan,
+`agentcore/turn/loop` is the Turn decision interpreter. The TurnStore remains the
+source of authority. Each operation loads the Turn, derives the next plan,
 commits protocol transitions, and reloads state when another actor has advanced
 it.
 
 The finite protocol operations are:
 
-- `Advance` interprets the Run until it dispatches one or more assignments or
+- `Advance` interprets the Turn until it dispatches one or more assignments or
   reaches a waiting or finished state. It prepares and commits protocol
   transitions, then returns assignment keys before outcome retrieval.
 - `Deliver` accepts one available Outcome, verifies that the named effect is
   still executing, commits the settlement, and reports the next action. A
   stale outcome is dropped.
 
-`Run` is a synchronous composition of these same operations: Advance, wait for
-Outcomes, Deliver, and repeat. It does not define another execution protocol.
+A blocking loop drive is a synchronous composition of these same operations:
+Advance, wait for Outcomes, Deliver, and repeat. It does not define another
+execution protocol.
 A tool step can have several pending effects, subject to its execution policy.
 
-The Loop serializes operations for one Run and permits different Runs to
+The Loop serializes operations for one Turn and permits different Turns to
 advance concurrently. Its EventSink carries committed facts and provisional
 model or tool observations. The ledger remains authoritative for committed
 state.
 
-Context cancellation interrupts the operation; it is not a Run cancellation.
-Domain cancellation is recorded as Run facts. Reconciliation uses those
+Context cancellation interrupts the operation; it is not a Turn cancellation.
+Domain cancellation is recorded as Turn facts. Reconciliation uses those
 persisted dispositions to cancel the corresponding executions. Interrupted
 settlement leaves the Outcome available for delivery under the same identity.
 
 Acknowledgement requires both an effect-naming durable disposition and a
-terminal Execution. A terminal Run or dropped delivery alone is not proof
+terminal Execution. A terminal Turn or dropped delivery alone is not proof
 that an Outcome can be collected.
 
 ## Execution boundary
+
+Every assignment is addressed by `(Session, OwnerKind, OwnerID, EffectID)`.
+`OwnerKind` separates Turn work from compaction work, even when their IDs
+coincide. Turn assignments use the TurnID as OwnerID; compaction assignments
+use the compaction operation ID. StepID and CallID describe the requested work
+and travel with the assignment rather than forming another owner identity.
 
 The executor uses the following lifecycle:
 
@@ -254,7 +263,7 @@ The Session Kernel composes the durable semantic services:
 - the ledger and commit observers;
 - the module registry;
 - projections and projection caches;
-- the Run adapter;
+- the Turn store adapter;
 - Turn coordination;
 - chatlog commands;
 - artifacts, frozen content, and session history.
