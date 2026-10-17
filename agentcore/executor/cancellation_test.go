@@ -11,7 +11,7 @@ import (
 	"github.com/felinics/twilight/agentcore/executor/store"
 	"github.com/felinics/twilight/agentcore/executor/store/storetest"
 	"github.com/felinics/twilight/agentcore/ledger"
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 // RPC hooks run outside the mutex, so a test can commit cancellation while

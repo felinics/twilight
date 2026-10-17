@@ -6,9 +6,9 @@ import (
 	"github.com/felinics/twilight/agentcore/jsonstable"
 	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/module"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/model"
-	"github.com/felinics/twilight/agentcore/run/sessionstore"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/model"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
 	"testing"
 )
 
@@ -76,7 +76,7 @@ func TestSurfaceFoldIsPure(t *testing.T) {
 	var seq ledger.CommitSeq
 	next := func() ledger.Position { seq++; return ledger.Position{Commit: seq} }
 	assistant := func(id string) module.DecodedEvent {
-		return module.DecodedEvent{Position: next(), Value: sessionstore.Event{RunID: "r", Fact: run.ModelStepCompleted{StepID: run.StepID(id), FinishReason: model.FinishReasonStop, ResultDigest: "sha256:x"}}}
+		return module.DecodedEvent{Position: next(), Value: sessionstore.Event{TurnID: "r", Fact: turn.ModelStepCompleted{StepID: turn.StepID(id), FinishReason: model.FinishReasonStop, ResultDigest: "sha256:x"}}}
 	}
 	input := func(id string) module.DecodedEvent {
 		return module.DecodedEvent{Position: next(), Value: InputSubmittedPayload{InputID: InputID(id), Content: jsonstable.MustParse(`{"text":"x"}`)}}

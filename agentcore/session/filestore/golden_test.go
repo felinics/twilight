@@ -17,8 +17,8 @@ var update = flag.Bool("update", false, "rewrite the golden testdata files from 
 // TestLogFileGolden freezes the exact on-disk bytes of a stream: header.json
 // and log.jsonl produced from fixed inputs. It is the end-of-line fixture for
 // the kernel wire — a diff here is a wire change. Regenerate deliberately
-// with `go test -run TestLogFileGolden -update./agent/session/filestore` and
-// record the change in agent-session.md.
+// with `go test ./agentcore/session/filestore -run TestLogFileGolden -update` and
+// record the change in docs/architecture/core.md.
 func TestLogFileGolden(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -52,8 +52,8 @@ func TestLogFileGolden(t *testing.T) {
 		{Domain: ledger.Domain{Name: "chat"}, Events: []ledger.Event{
 			ev("twilight/x/c", `{}`, 3),
 		}},
-		{Domain: ledger.Domain{Name: "run", Id: "r7"}, Events: []ledger.Event{
-			ev("twilight/run/created", `{"runId":"r7"}`, 3),
+		{Domain: ledger.Domain{Name: "turn", Id: "t7"}, Events: []ledger.Event{
+			ev("twilight/turn/turn_started", `{"turnId":"t7"}`, 3),
 		}},
 	}}); err != nil {
 		t.Fatal(err)
@@ -87,6 +87,6 @@ func compare(t *testing.T, gotPath, goldenName string) {
 		t.Fatalf("missing golden file (regenerate with -update after a deliberate wire change): %v", err)
 	}
 	if string(got) != string(want) {
-		t.Fatalf("%s drifted from the on-disk golden — an intentional wire change must be regenerated with -update and recorded in agent-session.md:\n got:\n%s\nwant:\n%s", goldenName, got, want)
+		t.Fatalf("%s drifted from the on-disk golden — an intentional wire change must be regenerated with -update and recorded in docs/architecture/core.md:\n got:\n%s\nwant:\n%s", goldenName, got, want)
 	}
 }

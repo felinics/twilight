@@ -13,11 +13,11 @@ import (
 	"github.com/felinics/twilight/agentcore/executor/store"
 	"github.com/felinics/twilight/agentcore/executor/store/storetest"
 	"github.com/felinics/twilight/agentcore/ledger"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/effect"
-	"github.com/felinics/twilight/agentcore/run/model"
-	"github.com/felinics/twilight/agentcore/run/schema"
 	"github.com/felinics/twilight/agentcore/testutil/sdkconv"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/effect"
+	"github.com/felinics/twilight/agentcore/turn/model"
+	"github.com/felinics/twilight/agentcore/turn/schema"
 	"github.com/felinics/twilight/sdk"
 )
 
@@ -42,7 +42,7 @@ func newTestBackend() *testBackend {
 	return &testBackend{outcomes: make(map[effect.AssignmentKey]chan effect.Outcome)}
 }
 
-func (b *testBackend) Validate(context.Context, effect.Assignment) (*run.ToolFailure, error) {
+func (b *testBackend) Validate(context.Context, effect.Assignment) (*turn.ToolFailure, error) {
 	return nil, nil
 }
 func (b *testBackend) Dispatch(_ context.Context, a effect.Assignment) error {
@@ -188,7 +188,7 @@ func testAssignment() effect.Assignment {
 	if err != nil {
 		panic(err)
 	}
-	return effect.Assignment{Session: "s", RunID: "r", StepID: "step", Effect: "effect",
+	return effect.Assignment{Session: "s", OwnerKind: effect.OwnerTurn, OwnerID: string("r"), StepID: "step", Effect: "effect",
 		Body: effect.ModelAssignment{Model: "m", Request: &request, RequestDigest: digest}}
 }
 
@@ -601,12 +601,12 @@ func TestRecordStoreSurvivesWorkerRecreation(t *testing.T) {
 }
 
 func testToolAssignment() effect.Assignment {
-	return effect.Assignment{Session: "s", RunID: "r", StepID: "step", CallID: "call-1", Effect: "effect",
-		Body: effect.ToolAssignment{ToolRef: "gate", DefinitionDigest: "d", Arguments: run.MustParseCanonicalJSON(`{}`), Policy: run.DirectExecution}}
+	return effect.Assignment{Session: "s", OwnerKind: effect.OwnerTurn, OwnerID: string("r"), StepID: "step", CallID: "call-1", Effect: "effect",
+		Body: effect.ToolAssignment{ToolRef: "gate", DefinitionDigest: "d", Arguments: turn.MustParseCanonicalJSON(`{}`), Policy: turn.DirectExecution}}
 }
 
 // Dispose is the control plane's give-up path: the record settles Unknown
-// regardless of owner or lease, so the Owner's next read disposes the Run
+// regardless of owner or lease, so the Owner's next read disposes the Turn
 // target; a terminal record is left alone and a key with no record is not
 // found.
 func TestWorkerDisposeSettlesUnknown(t *testing.T) {
@@ -728,7 +728,7 @@ func TestDispatchRefusalClassification(t *testing.T) {
 		retryable  bool
 	}{
 		{"record store unavailable", failingCreateStore{storetest.NewMap(nil)}, testAssignment(), true},
-		{"assignment without body", storetest.NewMap(nil), effect.Assignment{Session: "s", RunID: "r", Effect: "e"}, false},
+		{"assignment without body", storetest.NewMap(nil), effect.Assignment{Session: "s", OwnerKind: effect.OwnerTurn, OwnerID: string("r"), Effect: "e"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -8,8 +8,8 @@ import (
 	"time"
 
 	executionstore "github.com/felinics/twilight/agentcore/executor/store"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 // Directory is optional. Every adapter that exposes it runs this scenario
@@ -30,22 +30,23 @@ func testDirectory(t *testing.T, f Fixture) {
 		key    effect.AssignmentKey
 		status effect.ExecutionStatus
 	}{
-		{effect.AssignmentKey{Session: "a", RunID: "r", Effect: "z"}, effect.ExecutionAccepted},
-		{effect.AssignmentKey{Session: "a", RunID: "r/", Effect: "a"}, effect.ExecutionDispatching},
-		{effect.AssignmentKey{Session: "a/", RunID: "a", Effect: "a"}, effect.ExecutionRunning},
-		{effect.AssignmentKey{Session: "b", RunID: "r", Effect: "a"}, effect.ExecutionCancelRequested},
-		{effect.AssignmentKey{Session: "b", RunID: "r", Effect: "b"}, effect.ExecutionCompleted},
-		{effect.AssignmentKey{Session: "b", RunID: "r", Effect: "c"}, effect.ExecutionFailed},
-		{effect.AssignmentKey{Session: "b", RunID: "r", Effect: "d"}, effect.ExecutionCancelled},
-		{effect.AssignmentKey{Session: "b", RunID: "r", Effect: "e"}, effect.ExecutionUnknown},
+		{effect.AssignmentKey{Session: "a", OwnerKind: effect.OwnerCompaction, OwnerID: "r", Effect: "z"}, effect.ExecutionAccepted},
+		{effect.AssignmentKey{Session: "a", OwnerKind: effect.OwnerTurn, OwnerID: string("r"), Effect: "z"}, effect.ExecutionAccepted},
+		{effect.AssignmentKey{Session: "a", OwnerKind: effect.OwnerTurn, OwnerID: string("r/"), Effect: "a"}, effect.ExecutionDispatching},
+		{effect.AssignmentKey{Session: "a/", OwnerKind: effect.OwnerTurn, OwnerID: string("a"), Effect: "a"}, effect.ExecutionRunning},
+		{effect.AssignmentKey{Session: "b", OwnerKind: effect.OwnerTurn, OwnerID: string("r"), Effect: "a"}, effect.ExecutionCancelRequested},
+		{effect.AssignmentKey{Session: "b", OwnerKind: effect.OwnerTurn, OwnerID: string("r"), Effect: "b"}, effect.ExecutionCompleted},
+		{effect.AssignmentKey{Session: "b", OwnerKind: effect.OwnerTurn, OwnerID: string("r"), Effect: "c"}, effect.ExecutionFailed},
+		{effect.AssignmentKey{Session: "b", OwnerKind: effect.OwnerTurn, OwnerID: string("r"), Effect: "d"}, effect.ExecutionCancelled},
+		{effect.AssignmentKey{Session: "b", OwnerKind: effect.OwnerTurn, OwnerID: string("r"), Effect: "e"}, effect.ExecutionUnknown},
 	}
 	want := make([]effect.ExecutionSummary, len(rows))
 	for i := len(rows) - 1; i >= 0; i-- {
 		row := rows[i]
 		a := assignment(row.key.Effect)
-		a.Session, a.RunID = row.key.Session, row.key.RunID
+		a.Session, a.OwnerKind, a.OwnerID = row.key.Session, row.key.OwnerKind, row.key.OwnerID
 		state := executionstore.Execution{ExecutionState: executionstore.ExecutionState{Assignment: a, State: row.status}}
-		if i == 2 {
+		if row.status == effect.ExecutionRunning {
 			state.Lease = executionstore.Lease{Key: row.key, Owner: "expired-worker", Epoch: 3, UntilUnixMilli: 1}
 		}
 		if err := s.Seed(ctx, state); err != nil {
@@ -62,7 +63,7 @@ func testDirectory(t *testing.T, f Fixture) {
 		status effect.ExecutionStatus
 		acked  bool
 	}{{"aa-aborted", effect.ExecutionAborted, false}, {"bb-acked", effect.ExecutionCompleted, true}} {
-		a := assignment(run.EffectID(excluded.id))
+		a := assignment(turn.EffectID(excluded.id))
 		a.Session = "b"
 		if err := s.Seed(ctx, executionstore.Execution{ExecutionState: executionstore.ExecutionState{Assignment: a, State: excluded.status, Acknowledged: excluded.acked}}); err != nil {
 			t.Fatal(err)
@@ -77,9 +78,9 @@ func testDirectory(t *testing.T, f Fixture) {
 	}
 	checkDirectoryPagination(t, d, want)
 	// after need not still exist (or ever have existed).
-	after := effect.AssignmentKey{Session: "b", RunID: "r", Effect: "c-between"}
+	after := effect.AssignmentKey{Session: "b", OwnerKind: effect.OwnerTurn, OwnerID: string("r"), Effect: "c-between"}
 	page, err := d.ListOutstanding(ctx, after, 1)
-	if err != nil || len(page.Items) != 1 || page.Items[0].Key != rows[6].key || !page.More {
+	if err != nil || len(page.Items) != 1 || page.Items[0].Key != rows[7].key || !page.More {
 		t.Fatalf("exclusive absent cursor=%+v err=%v", page, err)
 	}
 	for _, limit := range []int{0, -1} {

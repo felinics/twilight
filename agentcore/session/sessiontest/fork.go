@@ -29,8 +29,8 @@ func testFork(t *testing.T, f Fixture) {
 	parent := create(t, store, "parent")
 	pw := open(t, store, "parent", false)
 	c0 := appendCommit(t, pw, "c0", batch(chatStream(), "twilight/x/a", `{"n":0}`))
-	c1 := appendCommit(t, pw, "c1", batch(chatStream(), "twilight/x/a", `{"n":1}`), batch(runStream("r1"), "twilight/x/r", `{"n":1}`))
-	appendCommit(t, pw, "c2", batch(runStream("r1"), "twilight/x/r", `{"n":2}`))
+	c1 := appendCommit(t, pw, "c1", batch(chatStream(), "twilight/x/a", `{"n":1}`), batch(turnStream("r1"), "twilight/x/r", `{"n":1}`))
+	appendCommit(t, pw, "c2", batch(turnStream("r1"), "twilight/x/r", `{"n":2}`))
 
 	// Rejections write nothing: unknown parent, a commit the parent does not
 	// have, a Session forking itself.
@@ -103,7 +103,7 @@ func testFork(t *testing.T, f Fixture) {
 	if _, err := cw.Append(ctx, ledger.Proposal{CommitID: "c0", Batches: []ledger.EventBatch{batch(chatStream(), "twilight/x/a", `{"dup":true}`)}}); !session.IsCode(err, session.ErrConflict) {
 		t.Fatalf("append of an inherited CommitID = %v, want conflict", err)
 	}
-	c3 := appendCommit(t, cw, "c3", batch(chatStream(), "twilight/x/a", n3Payload), batch(runStream("r1"), "twilight/x/r", n3Payload))
+	c3 := appendCommit(t, cw, "c3", batch(chatStream(), "twilight/x/a", n3Payload), batch(turnStream("r1"), "twilight/x/r", n3Payload))
 	if c3.Seq != c1.Seq+1 {
 		t.Fatalf("first own commit = seq %d, want %d", c3.Seq, c1.Seq+1)
 	}
@@ -151,16 +151,16 @@ func testFork(t *testing.T, f Fixture) {
 	if len(sp.Events) != 1 || sp.Events[0].Payload.String() != n3Payload {
 		t.Fatalf("child chat stream from 2 = %+v", sp.Events)
 	}
-	sp, err = store.ReadStream(ctx, session.StreamReadRequest{SessionID: "child", Domain: runStream("r1"), Inheritance: module.Own})
+	sp, err = store.ReadStream(ctx, session.StreamReadRequest{SessionID: "child", Domain: turnStream("r1"), Inheritance: module.Own})
 	if err != nil || len(sp.Events) != 1 || sp.Events[0].Payload.String() != n3Payload {
-		t.Fatalf("child run stream = %+v %v, want the child's own event only", sp.Events, err)
+		t.Fatalf("child Turn stream = %+v %v, want the child's own event only", sp.Events, err)
 	}
-	sp, err = store.ReadStream(ctx, session.StreamReadRequest{SessionID: "child", Domain: runStream("r1"), Inheritance: module.Inherited})
+	sp, err = store.ReadStream(ctx, session.StreamReadRequest{SessionID: "child", Domain: turnStream("r1"), Inheritance: module.Inherited})
 	if err != nil || len(sp.Events) != 2 || sp.Events[1].Payload.String() != n3Payload {
-		t.Fatalf("child run stream stitched = %+v %v, want c1 then c3", sp.Events, err)
+		t.Fatalf("child Turn stream stitched = %+v %v, want c1 then c3", sp.Events, err)
 	}
-	if sp, _ = store.ReadStream(ctx, session.StreamReadRequest{SessionID: "parent", Domain: runStream("r1"), Inheritance: module.Own}); len(sp.Events) != 2 {
-		t.Fatalf("parent run stream = %+v, want c1 and c2", sp.Events)
+	if sp, _ = store.ReadStream(ctx, session.StreamReadRequest{SessionID: "parent", Domain: turnStream("r1"), Inheritance: module.Own}); len(sp.Events) != 2 {
+		t.Fatalf("parent Turn stream = %+v, want c1 and c2", sp.Events)
 	}
 
 	// Reopen continues from the edge and keeps the prefix visible.

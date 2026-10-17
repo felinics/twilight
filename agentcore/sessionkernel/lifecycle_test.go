@@ -5,11 +5,11 @@ import (
 	"testing"
 
 	"github.com/felinics/twilight/agentcore/artifact/artifacttest"
-	"github.com/felinics/twilight/agentcore/run/sessionstore"
 	"github.com/felinics/twilight/agentcore/session"
 	"github.com/felinics/twilight/agentcore/session/filestore/filestoretest"
 	"github.com/felinics/twilight/agentcore/session/writer"
 	"github.com/felinics/twilight/agentcore/sessionkernel"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
 )
 
 func TestKernelCloseDoesNotCloseBoundWriterOrLease(t *testing.T) {

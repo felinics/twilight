@@ -1,6 +1,6 @@
 // Package turntest is the Store-parameterized conformance suite of the Turn
 // module. The Coordinator is pure protocol, so the suite assembles Writers,
-// a Runtime and a Coordinator over the Store under test and drives Runs step
+// a Runtime and a Coordinator over the Store under test and drives TurnStore step
 // by step through Runtime commits: no Loop, driver, model or tool stub is
 // involved.
 package runtimetest
@@ -15,18 +15,17 @@ import (
 	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/module"
 	"github.com/felinics/twilight/agentcore/preset"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/frozen"
-	"github.com/felinics/twilight/agentcore/run/model"
-	"github.com/felinics/twilight/agentcore/run/schema"
-	"github.com/felinics/twilight/agentcore/run/sessionstore"
-	"github.com/felinics/twilight/agentcore/run/sessionstore/sessionstoretest"
-	"github.com/felinics/twilight/agentcore/run/store"
 	"github.com/felinics/twilight/agentcore/session"
 	"github.com/felinics/twilight/agentcore/session/writer"
 	"github.com/felinics/twilight/agentcore/session/writer/writertest"
 	"github.com/felinics/twilight/agentcore/sessionkernel"
 	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/frozen"
+	"github.com/felinics/twilight/agentcore/turn/model"
+	"github.com/felinics/twilight/agentcore/turn/schema"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore/sessionstoretest"
+	"github.com/felinics/twilight/agentcore/turn/store"
 	"testing"
 	"time"
 )
@@ -55,13 +54,13 @@ type harness struct {
 	now       int64
 	seq       int
 	w         writer.Writer
-	rt        *sessionstore.SessionRunStore
+	rt        *sessionstore.SessionTurnStore
 	c         *sessionkernel.Coordinator
 }
 
 func newHarness(t testing.TB, f Fixture) *harness {
 	t.Helper()
-	registry, err := module.BuildRegistry(chatlog.Module, sessionstore.Module, turn.Module)
+	registry, err := module.BuildRegistry(chatlog.Module, sessionstore.Module)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,12 +84,12 @@ func (h *harness) open() {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	runs, err := sessionstore.NewSessionRunStore(sessionstore.Config{Registry: h.registry, Store: h.store, Frozen: h.frozen, Now: clock})
+	turns, err := sessionstore.NewSessionTurnStore(sessionstore.Config{Registry: h.registry, Store: h.store, Frozen: h.frozen, Now: clock})
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	h.rt = runs
-	h.c = &sessionkernel.Coordinator{Projections: session.NewProjectionReader(h.store, h.registry, nil), Runs: runs, Now: clock}
+	h.rt = turns
+	h.c = &sessionkernel.Coordinator{Projections: session.NewProjectionReader(h.store, h.registry, nil), TurnStore: turns, Now: clock}
 }
 
 // takeover opens a new owner process and returns the superseded Coordinator
@@ -105,8 +104,8 @@ func (h *harness) takeover() (*sessionkernel.Coordinator, writer.Writer) {
 
 func (h *harness) fatal(args ...any) { h.t.Helper(); h.t.Fatal(args...) }
 
-func (h *harness) ref(turnID turn.TurnID) turn.TurnRef {
-	return turn.TurnRef{SessionID: sid, TurnID: turnID}
+func (h *harness) ref(turnID turn.TurnID) sessionstore.TurnRef {
+	return sessionstore.TurnRef{SessionID: sid, TurnID: turnID}
 }
 
 func (h *harness) writer() writer.Writer {
@@ -142,24 +141,24 @@ func flattenCommit(c ledger.Commit) []ledger.Event {
 }
 
 // inputContent is the body the harness submits for id; the AgentInput the
-// Run sees carries only its digest.
-func inputContent(id string) run.CanonicalJSON {
-	return run.MustParseCanonicalJSON(fmt.Sprintf(`{"text":%q}`, id))
+// Turn sees carries only its digest.
+func inputContent(id string) turn.CanonicalJSON {
+	return turn.MustParseCanonicalJSON(fmt.Sprintf(`{"text":%q}`, id))
 }
 
-func input(id string) run.AgentInput {
+func input(id string) turn.AgentInput {
 	d, err := chatlog.DigestInput(chatlog.InputID(id), inputContent(id))
 	if err != nil {
 		panic(err)
 	}
-	return run.AgentInput{ID: run.InputID(id), Digest: d}
+	return turn.AgentInput{ID: turn.InputID(id), Digest: d}
 }
 
 // submit writes twilight/chatlog/input_submitted for each id and returns the
 // AgentInputs a Start or Deliver hands to the Coordinator.
-func (h *harness) submit(ids ...string) []run.AgentInput {
+func (h *harness) submit(ids ...string) []turn.AgentInput {
 	h.t.Helper()
-	out := make([]run.AgentInput, len(ids))
+	out := make([]turn.AgentInput, len(ids))
 	for i, id := range ids {
 		in := input(id)
 		h.mustApply(writer.SemanticGroup{CommitID: ledger.CommitID("submitted/" + id),
@@ -171,7 +170,7 @@ func (h *harness) submit(ids ...string) []run.AgentInput {
 	return out
 }
 
-func (h *harness) startRequest(turnID turn.TurnID, inputs ...run.AgentInput) sessionkernel.StartRequest {
+func (h *harness) startRequest(turnID turn.TurnID, inputs ...turn.AgentInput) sessionkernel.StartRequest {
 	return sessionkernel.StartRequest{Ref: h.ref(turnID), Inputs: inputs, Preset: presetRef}
 }
 
@@ -194,13 +193,13 @@ func (h *harness) status(turnID turn.TurnID) sessionkernel.TurnResult {
 	return resp
 }
 
-func (h *harness) surface() turn.TurnSurface {
+func (h *harness) surface() sessionstore.TurnSurface {
 	h.t.Helper()
-	state, _, err := h.writer().Projections().Load(h.ctx, sid, turn.SurfaceProjectionID, turn.SurfaceProjection.Version)
+	state, _, err := h.writer().Projections().Load(h.ctx, sid, sessionstore.SurfaceProjectionID, sessionstore.SurfaceProjection.Version)
 	if err != nil {
 		h.fatal(err)
 	}
-	surface, ok := state.(turn.TurnSurface)
+	surface, ok := state.(sessionstore.TurnSurface)
 	if !ok {
 		h.fatal(fmt.Errorf("turn surface projection is %T", state))
 	}
@@ -292,37 +291,37 @@ func decode[T any](t testing.TB, registry *module.Registry, event *ledger.Event)
 	return v
 }
 
-func (h *harness) load(runID run.RunID) store.Snapshot {
+func (h *harness) load(turnID turn.TurnID) store.Snapshot {
 	h.t.Helper()
-	snap, err := h.rt.Bind(h.writer()).Load(h.ctx, runID)
+	snap, err := h.rt.Bind(h.writer()).Load(h.ctx, turnID)
 	if err != nil {
 		h.fatal(err)
 	}
 	return snap
 }
 
-// --- driving a Run without a Loop ----------------------------------------------------
+// --- driving a Turn without a Loop ----------------------------------------------------
 
 // modelEffect derives the next model effect of the Prepared step.
-func (h *harness) modelEffect(runID run.RunID, step run.StepID) run.EffectID {
+func (h *harness) modelEffect(turnID turn.TurnID, step turn.StepID) turn.EffectID {
 	h.t.Helper()
-	ms, ok := h.load(runID).State.Current.(run.ModelStep)
+	ms, ok := h.load(turnID).State.Current.(turn.ModelStep)
 	if !ok || ms.RefValue.ID != step {
 		h.fatal(fmt.Sprintf("model effect of %s: current is not the step", step))
 	}
-	return schema.Identity().DeriveEffectID(runID, step, "", ms.Rejects)
+	return schema.Identity().DeriveEffectID(turnID, step, "", ms.Rejects)
 }
 
-// commitResult is a Run command's result plus the events of the commit it
+// commitResult is a Turn command's result plus the events of the commit it
 // landed in.
 type commitResult struct {
 	store.CommitResult
 	Events []ledger.Event
 }
 
-func (h *harness) runCommit(runID run.RunID, id run.CommandID, base run.RunPosition, cmd run.AgentCommand) (commitResult, error) {
+func (h *harness) runCommit(turnID turn.TurnID, id turn.CommandID, base turn.TurnPosition, cmd turn.AgentCommand) (commitResult, error) {
 	h.t.Helper()
-	env, err := schema.Wire().Envelope(runID, id, cmd)
+	env, err := schema.Wire().Envelope(turnID, id, cmd)
 	if err != nil {
 		h.fatal(err)
 	}
@@ -347,9 +346,9 @@ func (h *harness) runCommit(runID run.RunID, id run.CommandID, base run.RunPosit
 	return out, nil
 }
 
-func (h *harness) mustRunCommit(runID run.RunID, id run.CommandID, base run.RunPosition, cmd run.AgentCommand) commitResult {
+func (h *harness) mustTurnCommit(turnID turn.TurnID, id turn.CommandID, base turn.TurnPosition, cmd turn.AgentCommand) commitResult {
 	h.t.Helper()
-	res, err := h.runCommit(runID, id, base, cmd)
+	res, err := h.runCommit(turnID, id, base, cmd)
 	if err != nil {
 		h.fatal(fmt.Sprintf("commit %T: %v", cmd, err))
 	}
@@ -358,20 +357,20 @@ func (h *harness) mustRunCommit(runID run.RunID, id run.CommandID, base run.RunP
 
 var toolDef = model.ToolDefinition{Name: "ask", Parameters: jsonstable.MustParse(`{"type":"object"}`)}
 
-func (h *harness) spec(policy run.ResponsePolicy) run.ToolSpec {
+func (h *harness) spec(policy turn.ResponsePolicy) turn.ToolSpec {
 	h.t.Helper()
 	d, err := schema.Canonical().DigestToolDefinition(toolDef)
 	if err != nil {
 		h.fatal(err)
 	}
-	return run.ToolSpec{Ref: "ask", Name: "ask", DefinitionDigest: d, Policy: policy}
+	return turn.ToolSpec{Ref: "ask", Name: "ask", DefinitionDigest: d, Policy: policy}
 }
 
-// prepare commits PrepareModelRequest at the Run's current position; specs is
+// prepare commits PrepareModelRequest at the Turn's current position; specs is
 // nil for a model step without tools.
-func (h *harness) prepare(runID run.RunID, specs []run.ToolSpec) run.StepID {
+func (h *harness) prepare(turnID turn.TurnID, specs []turn.ToolSpec) turn.StepID {
 	h.t.Helper()
-	snap := h.load(runID)
+	snap := h.load(turnID)
 	modelReq := userRequest("m-1", "go")
 	if len(specs) > 0 {
 		modelReq.Tools = []model.ToolDefinition{toolDef}
@@ -381,24 +380,24 @@ func (h *harness) prepare(runID run.RunID, specs []run.ToolSpec) run.StepID {
 	if err != nil {
 		h.fatal(err)
 	}
-	cmdID := schema.Identity().DeriveModelRequestCommandID(runID, snap.Position)
-	ids := make([]run.InputID, len(snap.State.PendingInputs))
+	cmdID := schema.Identity().DeriveModelRequestCommandID(turnID, snap.Position)
+	ids := make([]turn.InputID, len(snap.State.PendingInputs))
 	for i, in := range snap.State.PendingInputs {
 		ids[i] = in.ID
 	}
-	cmd := run.PrepareModelRequest{StepID: schema.Identity().DeriveModelStepID(runID, cmdID), Model: "m-1", Request: modelReq,
+	cmd := turn.PrepareModelRequest{StepID: schema.Identity().DeriveModelStepID(turnID, cmdID), Model: "m-1", Request: modelReq,
 		RequestDigest: reqDigest, InputIDs: ids, Tools: specs}
-	h.mustRunCommit(runID, cmdID, snap.Position, cmd)
+	h.mustTurnCommit(turnID, cmdID, snap.Position, cmd)
 	return cmd.StepID
 }
 
-// executingModel takes the Run to a model step that is Executing with no
+// executingModel takes the Turn to a model step that is Executing with no
 // worker in this process: the state RecoverInterrupted acts on.
-func (h *harness) executingModel(runID run.RunID) (run.StepID, run.EffectID) {
+func (h *harness) executingModel(turnID turn.TurnID) (turn.StepID, turn.EffectID) {
 	h.t.Helper()
-	step := h.prepare(runID, nil)
-	eff := h.modelEffect(runID, step)
-	res := h.mustRunCommit(runID, schema.Identity().DeriveStartCommandID(eff), 0, run.StartModelExecution{StepID: step, Effect: eff})
+	step := h.prepare(turnID, nil)
+	eff := h.modelEffect(turnID, step)
+	res := h.mustTurnCommit(turnID, schema.Identity().DeriveStartCommandID(eff), 0, turn.StartModelExecution{StepID: step, Effect: eff})
 	if res.Status != store.CommitAccepted {
 		h.fatal("start model was not accepted")
 	}
@@ -415,37 +414,37 @@ func textResult(text string) model.ModelResult {
 	return model.ModelResult{Text: text, FinishReason: model.FinishReasonStop, Usage: model.Usage{TotalTokens: 1}}
 }
 
-// complete finishes the Run with a text result; the surface folds the Turn to
-// completed from the run_ended of the same group.
-func (h *harness) complete(runID run.RunID) commitResult {
+// complete finishes the Turn with a text result; the surface folds the Turn to
+// completed from the turn_ended of the same group.
+func (h *harness) complete(turnID turn.TurnID) commitResult {
 	h.t.Helper()
-	step, eff := h.executingModel(runID)
-	return h.mustRunCommit(runID, schema.Identity().DeriveSettlementCommandID(eff), 0, run.SubmitModelResult{StepID: step, Effect: eff, Result: textResult("done")})
+	step, eff := h.executingModel(turnID)
+	return h.mustTurnCommit(turnID, schema.Identity().DeriveSettlementCommandID(eff), 0, turn.SubmitModelResult{StepID: step, Effect: eff, Result: textResult("done")})
 }
 
-// waitingTool takes the Run to a ToolStep whose single call needs approval.
-func (h *harness) waitingTool(runID run.RunID) {
+// waitingTool takes the Turn to a ToolStep whose single call needs approval.
+func (h *harness) waitingTool(turnID turn.TurnID) {
 	h.t.Helper()
-	spec := h.spec(run.ApprovalRequired)
-	step := h.prepare(runID, []run.ToolSpec{spec})
-	eff := h.modelEffect(runID, step)
-	if res := h.mustRunCommit(runID, schema.Identity().DeriveStartCommandID(eff), 0, run.StartModelExecution{StepID: step, Effect: eff}); res.Status != store.CommitAccepted {
+	spec := h.spec(turn.ApprovalRequired)
+	step := h.prepare(turnID, []turn.ToolSpec{spec})
+	eff := h.modelEffect(turnID, step)
+	if res := h.mustTurnCommit(turnID, schema.Identity().DeriveStartCommandID(eff), 0, turn.StartModelExecution{StepID: step, Effect: eff}); res.Status != store.CommitAccepted {
 		h.fatal("start model was not accepted")
 	}
-	args := run.MustParseCanonicalJSON(`{"q":1}`)
+	args := turn.MustParseCanonicalJSON(`{"q":1}`)
 	callID := schema.Identity().DeriveCallID(step, 0)
 	result := model.ModelResult{FinishReason: model.FinishReasonToolCalls, Usage: model.Usage{TotalTokens: 2},
 		ToolCalls: []model.ModelToolCall{{ToolCallID: "c0", ToolName: "ask", Input: model.ToolArguments{JSON: args}}}}
-	binding := run.ToolCallBinding{CallID: callID, ProviderCallID: "c0", ToolRef: spec.Ref, DefinitionDigest: spec.DefinitionDigest,
+	binding := turn.ToolCallBinding{CallID: callID, ProviderCallID: "c0", ToolRef: spec.Ref, DefinitionDigest: spec.DefinitionDigest,
 		Arguments: args, Policy: spec.Policy, Replay: spec.Replay, Placement: spec.Placement}
-	h.mustRunCommit(runID, schema.Identity().DeriveSettlementCommandID(eff), 0,
-		run.SubmitModelResult{StepID: step, Effect: eff, Result: result, Calls: []run.ToolCallBinding{binding}})
+	h.mustTurnCommit(turnID, schema.Identity().DeriveSettlementCommandID(eff), 0,
+		turn.SubmitModelResult{StepID: step, Effect: eff, Result: result, Calls: []turn.ToolCallBinding{binding}})
 }
 
-// appCancel is the Application's own CancelRun: the Run ends stopped and
-// its Turn settles as failed from the run_ended alone.
-func (h *harness) appCancel(runID run.RunID) {
+// appCancel is the Application's own CancelTurn: the Turn ends stopped and
+// its Turn settles as failed from the turn_ended alone.
+func (h *harness) appCancel(turnID turn.TurnID) {
 	h.t.Helper()
 	h.seq++
-	h.mustRunCommit(runID, run.CommandID(fmt.Sprintf("app-cancel-%d", h.seq)), 0, run.CancelRun{})
+	h.mustTurnCommit(turnID, turn.CommandID(fmt.Sprintf("app-cancel-%d", h.seq)), 0, turn.CancelTurn{})
 }

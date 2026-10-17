@@ -73,7 +73,7 @@ func committed(t *testing.T, h session.Handle, id ledger.CommitID) bool {
 
 func chatStream() ledger.Domain { return ledger.Domain{Name: "chat"} }
 
-func runStream(id string) ledger.Domain {
+func turnStream(id string) ledger.Domain {
 	return ledger.Domain{Name: "run", Id: id}
 }
 
@@ -154,29 +154,29 @@ func testStreams(t *testing.T, f Fixture) {
 	appendCommit(t, w, "c1", batch(chatStream(), "twilight/chat/a", `{"n":1}`))
 	appendCommit(t, w, "c2",
 		batch(chatStream(), "twilight/chat/b", `{"n":2}`),
-		ledger.EventBatch{Domain: runStream("r7"), Events: []ledger.Event{
-			{Type: "twilight/run/run_created", RecordedAtUnixMilli: 1, Payload: jsonstable.MustParse(`{"runId":"r7"}`)},
-			{Type: "twilight/run/model_step_completed", RecordedAtUnixMilli: 1, Payload: jsonstable.MustParse(`{"runId":"r7"}`)},
+		ledger.EventBatch{Domain: turnStream("r7"), Events: []ledger.Event{
+			{Type: "twilight/turn/turn_started", RecordedAtUnixMilli: 1, Payload: jsonstable.MustParse(`{"turnId":"r7"}`)},
+			{Type: "twilight/turn/model_step_completed", RecordedAtUnixMilli: 1, Payload: jsonstable.MustParse(`{"turnId":"r7"}`)},
 		}})
-	appendCommit(t, w, "c3", batch(runStream("r7"), "twilight/run/run_ended", `{"runId":"r7"}`))
+	appendCommit(t, w, "c3", batch(turnStream("r7"), "twilight/turn/turn_ended", `{"turnId":"r7"}`))
 	appendCommit(t, w, "c4", batch(chatStream(), "twilight/chat/c", `{"n":3}`))
 
 	page, err := f.Store.ReadStream(ctx, session.StreamReadRequest{SessionID: "s", Domain: chatStream(), Inheritance: module.Inherited})
 	if err != nil || len(page.Events) != 3 {
 		t.Fatalf("chat stream = %d events, err %v", len(page.Events), err)
 	}
-	runs, err := f.Store.ReadStream(ctx, session.StreamReadRequest{SessionID: "s", Domain: runStream("r7"), Inheritance: module.Own})
-	if err != nil || len(runs.Events) != 3 {
-		t.Fatalf("run stream = %d events, err %v", len(runs.Events), err)
+	turns, err := f.Store.ReadStream(ctx, session.StreamReadRequest{SessionID: "s", Domain: turnStream("r7"), Inheritance: module.Own})
+	if err != nil || len(turns.Events) != 3 {
+		t.Fatalf("Turn stream = %d events, err %v", len(turns.Events), err)
 	}
 	for i, want := range []string{"twilight/chat/a", "twilight/chat/b", "twilight/chat/c"} {
 		if page.Events[i].Type != ledger.EventType(want) {
 			t.Fatalf("session event %d = %s, want %s", i, page.Events[i].Type, want)
 		}
 	}
-	for i, want := range []string{"twilight/run/run_created", "twilight/run/model_step_completed", "twilight/run/run_ended"} {
-		if runs.Events[i].Type != ledger.EventType(want) {
-			t.Fatalf("run event %d = %s, want %s", i, runs.Events[i].Type, want)
+	for i, want := range []string{"twilight/turn/turn_started", "twilight/turn/model_step_completed", "twilight/turn/turn_ended"} {
+		if turns.Events[i].Type != ledger.EventType(want) {
+			t.Fatalf("Turn event %d = %s, want %s", i, turns.Events[i].Type, want)
 		}
 	}
 	// From counts inside the stream: it skips a stream's own events only.
@@ -184,9 +184,9 @@ func testStreams(t *testing.T, f Fixture) {
 	if err != nil || len(tail.Events) != 2 || tail.Events[0].Type != "twilight/chat/b" {
 		t.Fatalf("chat stream from 1 = %+v, err %v", tail.Events, err)
 	}
-	runTail, err := f.Store.ReadStream(ctx, session.StreamReadRequest{SessionID: "s", Domain: runStream("r7"), Inheritance: module.Own, From: 2})
-	if err != nil || len(runTail.Events) != 1 || runTail.Events[0].Type != "twilight/run/run_ended" {
-		t.Fatalf("run stream from 2 = %+v, err %v", runTail.Events, err)
+	turnTail, err := f.Store.ReadStream(ctx, session.StreamReadRequest{SessionID: "s", Domain: turnStream("r7"), Inheritance: module.Own, From: 2})
+	if err != nil || len(turnTail.Events) != 1 || turnTail.Events[0].Type != "twilight/turn/turn_ended" {
+		t.Fatalf("Turn stream from 2 = %+v, err %v", turnTail.Events, err)
 	}
 	limited, err := f.Store.ReadStream(ctx, session.StreamReadRequest{SessionID: "s", Domain: chatStream(), Inheritance: module.Inherited, Limit: 2})
 	if err != nil || len(limited.Events) != 2 || !limited.HasMore {
@@ -278,8 +278,8 @@ func testAppend(t *testing.T, f Fixture) {
 		{"empty type", ledger.Proposal{CommitID: "c", Batches: []ledger.EventBatch{{Domain: chatStream(), Events: []ledger.Event{{Payload: jsonstable.MustParse(`{}`), RecordedAtUnixMilli: 1}}}}}, session.ErrInvalid},
 		{"non-object payload", ledger.Proposal{CommitID: "c", Batches: []ledger.EventBatch{batch(chatStream(), "twilight/x/a", `[1]`)}}, session.ErrInvalid},
 		{"zero payload", ledger.Proposal{CommitID: "c", Batches: []ledger.EventBatch{{Domain: chatStream(), Events: []ledger.Event{{Type: "twilight/x/a", RecordedAtUnixMilli: 1}}}}}, session.ErrInvalid},
-		{"empty stream domain", ledger.Proposal{CommitID: "c", Batches: []ledger.EventBatch{batch(ledger.Domain{Id: "r7"}, "twilight/run/a", `{}`)}}, session.ErrInvalid},
-		{"stream domain with separator", ledger.Proposal{CommitID: "c", Batches: []ledger.EventBatch{batch(ledger.Domain{Name: "run/r7"}, "twilight/run/a", `{}`)}}, session.ErrInvalid},
+		{"empty stream domain", ledger.Proposal{CommitID: "c", Batches: []ledger.EventBatch{batch(ledger.Domain{Id: "r7"}, "twilight/turn/a", `{}`)}}, session.ErrInvalid},
+		{"stream domain with separator", ledger.Proposal{CommitID: "c", Batches: []ledger.EventBatch{batch(ledger.Domain{Name: "run/r7"}, "twilight/turn/a", `{}`)}}, session.ErrInvalid},
 		{"same stream twice", ledger.Proposal{CommitID: "c", Batches: []ledger.EventBatch{batch(chatStream(), "twilight/x/a", `{}`), batch(chatStream(), "twilight/x/b", `{}`)}}, session.ErrInvalid},
 	}
 	for _, tc := range rejects {
@@ -303,7 +303,7 @@ func testAppend(t *testing.T, f Fixture) {
 	// A spanning commit lands every batch or none: both sides are visible.
 	appendCommit(t, w, "c2",
 		batch(chatStream(), "twilight/chat/a", `{}`),
-		batch(runStream("r9"), "twilight/run/run_created", `{"runId":"r9"}`))
+		batch(turnStream("r9"), "twilight/turn/turn_started", `{"turnId":"r9"}`))
 	page, _ = f.Store.ReadCommits(ctx, session.CommitReadRequest{SessionID: "s", From: 1})
 	if len(page.Commits) != 1 || len(page.Commits[0].Batches) != 2 {
 		t.Fatalf("spanning commit not whole: %+v", page.Commits)
@@ -337,7 +337,7 @@ func testCrashTail(t *testing.T, f Fixture) {
 		}})
 	appendCommit(t, w, "c2",
 		batch(chatStream(), "twilight/x/c", `{"c":3}`),
-		batch(runStream("r7"), "twilight/run/run_created", `{"runId":"r7"}`))
+		batch(turnStream("r7"), "twilight/turn/turn_started", `{"turnId":"r7"}`))
 	if err := w.Close(ctx); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -381,15 +381,15 @@ func testRead(t *testing.T, f Fixture) {
 	w := open(t, f.Store, "s", false)
 	appendCommit(t, w, "c1",
 		ledger.EventBatch{Domain: chatStream(), Events: []ledger.Event{
-			{Type: "twilight/run/a", RecordedAtUnixMilli: 1, Payload: jsonstable.MustParse(`{}`)},
+			{Type: "twilight/turn/a", RecordedAtUnixMilli: 1, Payload: jsonstable.MustParse(`{}`)},
 			{Type: "twilight/chat/a", RecordedAtUnixMilli: 1, Payload: jsonstable.MustParse(`{}`)},
 		}},
-		batch(runStream("r1"), "twilight/run/model_step", `{"runId":"r1"}`))
+		batch(turnStream("r1"), "twilight/turn/model_step", `{"turnId":"r1"}`))
 	appendCommit(t, w, "c2", batch(chatStream(), "twilight/chat/b", `{}`))
 	appendCommit(t, w, "c3",
 		ledger.EventBatch{Domain: chatStream(), Events: []ledger.Event{
-			{Type: "twilight/run/c", RecordedAtUnixMilli: 1, Payload: jsonstable.MustParse(`{}`)},
-			{Type: "twilight/run/d", RecordedAtUnixMilli: 1, Payload: jsonstable.MustParse(`{}`)},
+			{Type: "twilight/turn/c", RecordedAtUnixMilli: 1, Payload: jsonstable.MustParse(`{}`)},
+			{Type: "twilight/turn/d", RecordedAtUnixMilli: 1, Payload: jsonstable.MustParse(`{}`)},
 			{Type: "twilight/chat/e", RecordedAtUnixMilli: 1, Payload: jsonstable.MustParse(`{}`)},
 		}})
 	all, err := f.Store.ReadCommits(ctx, session.CommitReadRequest{SessionID: "s"})
@@ -438,10 +438,10 @@ func testQuery(t *testing.T, f Fixture) {
 	w := open(t, f.Store, "s", false)
 	first := appendCommit(t, w, "c1",
 		ledger.EventBatch{Domain: chatStream(), Events: []ledger.Event{
-			{Type: "twilight/run/a", RecordedAtUnixMilli: 1, Payload: jsonstable.MustParse(`{"n":1}`)},
-			{Type: "twilight/run/b", RecordedAtUnixMilli: 1, Payload: jsonstable.MustParse(`{"n":2}`)},
+			{Type: "twilight/turn/a", RecordedAtUnixMilli: 1, Payload: jsonstable.MustParse(`{"n":1}`)},
+			{Type: "twilight/turn/b", RecordedAtUnixMilli: 1, Payload: jsonstable.MustParse(`{"n":2}`)},
 		}})
-	appendCommit(t, w, "c2", batch(chatStream(), "twilight/run/c", `{"n":3}`))
+	appendCommit(t, w, "c2", batch(chatStream(), "twilight/turn/c", `{"n":3}`))
 
 	if committed(t, w, "absent") {
 		t.Fatal("an unknown CommitID was reported committed")
@@ -477,7 +477,7 @@ func testQuery(t *testing.T, f Fixture) {
 	if got, ok, err := w.LookupCommit("c2"); err != nil || !ok || len(got.Batches) != 1 {
 		t.Fatalf("reopened lookup c2 = %+v, ok=%v, err=%v", got, ok, err)
 	}
-	last := appendCommit(t, w, "c3", batch(chatStream(), "twilight/run/d", `{"n":4}`))
+	last := appendCommit(t, w, "c3", batch(chatStream(), "twilight/turn/d", `{"n":4}`))
 	if got, ok, err := w.LookupCommit("c3"); err != nil || !ok || got.Seq != last.Seq {
 		t.Fatalf("lookup after append = %+v, ok=%v, err=%v", got, ok, err)
 	}

@@ -10,7 +10,7 @@ import (
 	"github.com/felinics/twilight/agentcore/compaction"
 	"github.com/felinics/twilight/agentcore/driver"
 	"github.com/felinics/twilight/agentcore/executor"
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 	"github.com/felinics/twilight/sdk"
 )
 

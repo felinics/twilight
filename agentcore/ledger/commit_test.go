@@ -53,7 +53,7 @@ func TestValidateBatches(t *testing.T) {
 		{"one batch", []EventBatch{oneEventBatch(chat, "twilight/x/a", `{"a":1}`)}, ""},
 		{"two streams in one commit", []EventBatch{
 			oneEventBatch(chat, "twilight/x/a", `{"a":1}`),
-			oneEventBatch(run, "twilight/run/created", `{"runId":"r7"}`),
+			oneEventBatch(run, "twilight/turn/created", `{"turnId":"r7"}`),
 		}, ""},
 		{"no batches", nil, "without batches"},
 		{"batch without events", []EventBatch{{Domain: chat}}, "no events"},
@@ -62,7 +62,7 @@ func TestValidateBatches(t *testing.T) {
 			oneEventBatch(chat, "twilight/x/b", `{"b":2}`),
 		}, "appears twice"},
 		{"stream domain with separator", []EventBatch{
-			oneEventBatch(Domain{Name: "run/r7"}, "twilight/run/created", `{"runId":"r7"}`),
+			oneEventBatch(Domain{Name: "run/r7"}, "twilight/turn/created", `{"turnId":"r7"}`),
 		}, `contains "/"`},
 		{"empty event type", []EventBatch{{Domain: chat, Events: []Event{
 			{RecordedAtUnixMilli: 1, Payload: jsonstable.MustParse(`{}`)},
@@ -91,7 +91,7 @@ func TestValidateBatches(t *testing.T) {
 func TestValidateCommit(t *testing.T) {
 	batches := []EventBatch{
 		oneEventBatch(Domain{Name: "chat"}, "twilight/x/a", `{"a":1}`),
-		oneEventBatch(Domain{Name: "run", Id: "r7"}, "twilight/run/created", `{"runId":"r7"}`),
+		oneEventBatch(Domain{Name: "run", Id: "r7"}, "twilight/turn/created", `{"turnId":"r7"}`),
 	}
 	cases := []struct {
 		name string

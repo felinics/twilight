@@ -5,7 +5,7 @@ import (
 	"github.com/felinics/twilight/agentcore/jsonstable"
 	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/module"
-	"github.com/felinics/twilight/agentcore/run/sessionstore"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
 	"testing"
 )
 

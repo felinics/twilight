@@ -13,9 +13,9 @@ import (
 	"github.com/felinics/twilight/agentcore/executor/store"
 	"github.com/felinics/twilight/agentcore/executor/store/storetest"
 	"github.com/felinics/twilight/agentcore/ledger"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/effect"
-	"github.com/felinics/twilight/agentcore/run/model"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/effect"
+	"github.com/felinics/twilight/agentcore/turn/model"
 	"github.com/felinics/twilight/sdk"
 )
 
@@ -433,12 +433,12 @@ func modelText(out effect.Outcome) string {
 func TestWorkerAdoptsToolByReplayDeclaration(t *testing.T) {
 	cases := []struct {
 		name     string
-		policy   run.ReplayPolicy
+		policy   turn.ReplayPolicy
 		replayed bool
 	}{
-		{"allowed", run.ReplayAllowed, true},
-		{"forbidden", run.ReplayForbidden, false},
-		{"unknown", run.ReplayUnknown, false},
+		{"allowed", turn.ReplayAllowed, true},
+		{"forbidden", turn.ReplayForbidden, false},
+		{"unknown", turn.ReplayUnknown, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -493,7 +493,7 @@ type transientBackend struct {
 	failures  int
 	starts    []string
 	code      effect.FailureCode
-	toolRetry run.RetryDisposition
+	toolRetry turn.RetryDisposition
 }
 
 func (b *transientBackend) Prepare(context.Context, effect.Assignment) (string, error) {
@@ -513,7 +513,7 @@ func (b *transientBackend) Start(_ context.Context, ref string, a effect.Assignm
 	}
 	if len(b.starts) <= b.failures {
 		if a.Kind() == effect.AssignmentTool {
-			result = effect.ToolExecutionFailed{Failure: run.ToolFailure{Class: run.FailureUnavailable, Message: "try again"}, Retry: b.toolRetry}
+			result = effect.ToolExecutionFailed{Failure: turn.ToolFailure{Class: turn.FailureUnavailable, Message: "try again"}, Retry: b.toolRetry}
 		} else {
 			result = effect.ModelFailed{Code: b.code, Message: "try again"}
 		}
@@ -548,7 +548,7 @@ func TestWorkerRetriesRetryableFailures(t *testing.T) {
 		assignment effect.Assignment
 		failures   int
 		code       effect.FailureCode
-		toolRetry  run.RetryDisposition
+		toolRetry  turn.RetryDisposition
 		budget     int
 		wantStarts int
 		wantOK     bool
@@ -557,9 +557,9 @@ func TestWorkerRetriesRetryableFailures(t *testing.T) {
 		{"model budget exhausted", testAssignment(), 5, effect.FailureProviderUnavailable, 0, 2, 2, false},
 		{"model definite failure", testAssignment(), 1, effect.FailureAuthentication, 0, 3, 1, false},
 		{"model retries disabled", testAssignment(), 1, effect.FailureConnection, 0, 0, 1, false},
-		{"tool failure declared retryable", testToolAssignment(), 1, "", run.RetryAllowed, 3, 2, true},
-		{"tool failure declared never", testToolAssignment(), 1, "", run.RetryNever, 3, 1, false},
-		{"tool failure unjudged", testToolAssignment(), 1, "", run.RetryUnknown, 3, 1, false},
+		{"tool failure declared retryable", testToolAssignment(), 1, "", turn.RetryAllowed, 3, 2, true},
+		{"tool failure declared never", testToolAssignment(), 1, "", turn.RetryNever, 3, 1, false},
+		{"tool failure unjudged", testToolAssignment(), 1, "", turn.RetryUnknown, 3, 1, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

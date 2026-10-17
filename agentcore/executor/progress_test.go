@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 // the hub stamps generation and sequence, replays after a
@@ -15,8 +15,8 @@ import (
 // what it keeps.
 func TestProgressHub(t *testing.T) {
 	ctx := context.Background()
-	key := effect.AssignmentKey{Session: "s", RunID: "r", Effect: "e"}
-	other := effect.AssignmentKey{Session: "s", RunID: "r", Effect: "x"}
+	key := effect.AssignmentKey{Session: "s", OwnerKind: effect.OwnerTurn, OwnerID: string("r"), Effect: "e"}
+	other := effect.AssignmentKey{Session: "s", OwnerKind: effect.OwnerTurn, OwnerID: string("r"), Effect: "x"}
 	h := NewProgressHub(8)
 	pub := func(k effect.AssignmentKey, text string) {
 		h.Publish(ctx, effect.ProgressFrame{Key: k, Kind: effect.ProgressTextDelta, Payload: json.RawMessage(`"` + text + `"`)})

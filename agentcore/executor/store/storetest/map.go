@@ -14,7 +14,7 @@ import (
 
 	executionstore "github.com/felinics/twilight/agentcore/executor/store"
 	"github.com/felinics/twilight/agentcore/ledger"
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 // Map is executionstore.Store over Go maps. The zero value is ready; Now is
@@ -246,8 +246,11 @@ func (m *Map) ListOwned(_ context.Context, owner string) ([]effect.AssignmentKey
 		if a.Session != b.Session {
 			return a.Session < b.Session
 		}
-		if a.RunID != b.RunID {
-			return a.RunID < b.RunID
+		if a.OwnerKind != b.OwnerKind {
+			return a.OwnerKind < b.OwnerKind
+		}
+		if a.OwnerID != b.OwnerID {
+			return a.OwnerID < b.OwnerID
 		}
 		return a.Effect < b.Effect
 	})

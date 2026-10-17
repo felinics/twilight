@@ -11,11 +11,14 @@ import (
 
 	"github.com/felinics/twilight/agentcore/chatlog"
 	"github.com/felinics/twilight/agentcore/compaction"
-	"github.com/felinics/twilight/agentcore/run/effect"
 	"github.com/felinics/twilight/agentcore/session"
 	"github.com/felinics/twilight/agentcore/session/writer"
 	"github.com/felinics/twilight/agentcore/session/writer/writertest"
 	"github.com/felinics/twilight/agentcore/sessionkernel"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/effect"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
+	"github.com/felinics/twilight/agentcore/turn/store"
 	"github.com/felinics/twilight/sdk"
 )
 
@@ -86,7 +89,7 @@ func TestCompactionForkSameCallerIDHasIndependentProtocol(t *testing.T) {
 	parentOp := f.assertOperation(f.w, id, compaction.Pending, false)
 	childOp := f.assertOperation(child, id, compaction.Pending, false)
 	parentKey, childKey := parentOp.Request.Key(compactSession), childOp.Request.Key(child.SessionID())
-	if parentKey == childKey || parentKey.RunID != childKey.RunID || parentKey.Effect != childKey.Effect {
+	if parentKey == childKey || parentKey.OwnerID != childKey.OwnerID || parentKey.Effect != childKey.Effect {
 		t.Fatalf("caller identity must remain stable under different Session scopes: parent=%+v child=%+v", parentKey, childKey)
 	}
 	for _, w := range []writer.Writer{f.w, child} {
@@ -210,4 +213,58 @@ func mustCompactSurface(f *compactFixture, w writer.Writer) chatlog.Surface {
 		f.t.Fatal(err)
 	}
 	return surface
+}
+
+func TestTurnForkInheritsHistoryWithoutExecutionState(t *testing.T) {
+	f := newCompactFixture(t, func(context.Context, sdk.Request) (sdk.ModelResult, error) {
+		return sdk.ModelResult{Text: "answer"}, nil
+	})
+	x := f.execution(f.worker, nil, true)
+	parent := f.startTurn("parent-turn", false)
+	if _, err := f.drive(x, f.w, parent.Ref.TurnID); err != nil {
+		t.Fatal(err)
+	}
+	parentSurface, err := sessionstore.ReadSurface(f.ctx, f.w.Projections(), compactSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := parentSurface.Turns[parent.Ref.TurnID]
+	if view.Status != turn.TurnCompleted || view.Preset != f.preset || len(view.InputIDs) != 1 {
+		t.Fatalf("parent = %+v", view)
+	}
+	child := f.forkWriter("turn-child")
+	inherited, err := sessionstore.ReadSurface(f.ctx, child.Projections(), child.SessionID())
+	if err != nil || !reflect.DeepEqual(inherited, parentSurface) {
+		t.Fatalf("inherited surface = %+v %v", inherited, err)
+	}
+	context, err := chatlog.ReadContext(f.ctx, child.Projections(), child.SessionID())
+	if err != nil || !reflect.DeepEqual(context.Entries, f.context().Entries) {
+		t.Fatalf("inherited context = %+v %v", context, err)
+	}
+	state, _, err := child.Projections().Load(f.ctx, child.SessionID(), sessionstore.MachineProjectionID, sessionstore.MachineProjection.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	machine, ok := state.(sessionstore.Machine)
+	if !ok || len(machine.Active) != 0 || len(machine.Positions) != 0 {
+		t.Fatalf("child machine = %+v", state)
+	}
+	if _, err := f.k.TurnStore.Record(f.ctx, child.SessionID(), parent.Ref.TurnID); !errors.Is(err, store.ErrTurnNotFound) {
+		t.Fatalf("inherited execution record = %v", err)
+	}
+	in, err := f.k.Chatlog.Submit(f.ctx, child, "child-input", turn.MustParseCanonicalJSON("{\"text\":\"child\"}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := f.k.Turns.Start(f.ctx, child, sessionkernel.StartRequest{Ref: sessionstore.TurnRef{SessionID: child.SessionID(), TurnID: "child-turn"}, Inputs: []turn.AgentInput{in}, Preset: f.preset})
+	if err != nil || next.Status != turn.TurnActive {
+		t.Fatalf("child start = %+v %v", next, err)
+	}
+	if _, err := f.drive(x, child, next.Ref.TurnID); err != nil {
+		t.Fatal(err)
+	}
+	unchanged, err := sessionstore.ReadSurface(f.ctx, f.w.Projections(), compactSession)
+	if err != nil || !reflect.DeepEqual(unchanged, parentSurface) {
+		t.Fatalf("parent changed: %+v %v", unchanged, err)
+	}
 }

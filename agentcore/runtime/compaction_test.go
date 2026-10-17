@@ -21,12 +21,6 @@ import (
 	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/preset"
 	"github.com/felinics/twilight/agentcore/prompt"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/effect"
-	"github.com/felinics/twilight/agentcore/run/model"
-	"github.com/felinics/twilight/agentcore/run/schema"
-	"github.com/felinics/twilight/agentcore/run/sessionstore"
-	"github.com/felinics/twilight/agentcore/run/store"
 	rt "github.com/felinics/twilight/agentcore/runtime"
 	"github.com/felinics/twilight/agentcore/session"
 	"github.com/felinics/twilight/agentcore/session/filestore/filestoretest"
@@ -36,12 +30,17 @@ import (
 	"github.com/felinics/twilight/agentcore/testutil/local"
 	"github.com/felinics/twilight/agentcore/testutil/sdkconv"
 	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/effect"
+	"github.com/felinics/twilight/agentcore/turn/model"
+	"github.com/felinics/twilight/agentcore/turn/schema"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
+	"github.com/felinics/twilight/agentcore/turn/store"
 	"github.com/felinics/twilight/sdk"
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
 const compactSession session.SessionID = "compaction-integration"
-const compactModel run.ModelRef = "test-model"
+const compactModel turn.ModelRef = "test-model"
 const compactSummary = "short summary"
 
 // These tests assemble only core ports: no reference-agent builder or test API
@@ -81,7 +80,7 @@ func newCompactFixture(t *testing.T, inv compactInvoker, tools ...local.Executab
 			t.Error(err)
 		}
 	})
-	catalog, err := local.NewCatalog(map[run.ModelRef]local.ModelInvoker{compactModel: inv}, tools...)
+	catalog, err := local.NewCatalog(map[turn.ModelRef]local.ModelInvoker{compactModel: inv}, tools...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +117,7 @@ func (f *compactFixture) newWorker() {
 
 func (f *compactFixture) execution(port effect.ExecutionPort, policy driver.ContextPolicy, frozen bool) *rt.Execution {
 	f.t.Helper()
-	src := rt.ExecutionSources{Runs: f.k.Runs, Projections: f.k.Projections, Content: f.k.Content}
+	src := rt.ExecutionSources{TurnStore: f.k.TurnStore, Projections: f.k.Projections, Content: f.k.Content}
 	if frozen {
 		src.Frozen = f.k.Frozen
 	}
@@ -215,12 +214,12 @@ func (f *compactFixture) startTurn(id string, stop bool) sessionkernel.TurnResul
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	in, err := f.k.Chatlog.Submit(f.ctx, f.w, run.InputID(id), run.MustParseCanonicalJSON(string(body)))
+	in, err := f.k.Chatlog.Submit(f.ctx, f.w, turn.InputID(id), turn.MustParseCanonicalJSON(string(body)))
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	ref := turn.TurnRef{SessionID: compactSession, TurnID: turn.TurnID(id)}
-	result, err := f.k.Turns.Start(f.ctx, f.w, sessionkernel.StartRequest{Ref: ref, Inputs: []run.AgentInput{in}, Preset: f.preset})
+	ref := sessionstore.TurnRef{SessionID: compactSession, TurnID: turn.TurnID(id)}
+	result, err := f.k.Turns.Start(f.ctx, f.w, sessionkernel.StartRequest{Ref: ref, Inputs: []turn.AgentInput{in}, Preset: f.preset})
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -332,7 +331,7 @@ func (b compactBuilder) Build(ctx context.Context, in prompt.Input) (prompt.Prom
 	if err != nil {
 		return prompt.Prompt{}, err
 	}
-	ids := make([]run.InputID, len(in.Inputs))
+	ids := make([]turn.InputID, len(in.Inputs))
 	for i := range in.Inputs {
 		ids[i] = in.Inputs[i].ID
 	}
@@ -341,7 +340,7 @@ func (b compactBuilder) Build(ctx context.Context, in prompt.Input) (prompt.Prom
 		return prompt.Prompt{}, err
 	}
 	request.Tools = definitions
-	return prompt.Prompt{Model: b.ap.Model, Request: request, InputIDs: ids, Token: run.PromptToken(digest), Tools: specs}, nil
+	return prompt.Prompt{Model: b.ap.Model, Request: request, InputIDs: ids, Token: turn.PromptToken(digest), Tools: specs}, nil
 }
 
 type compactPolicy struct {
@@ -445,7 +444,7 @@ func TestCompactionCandidateRebuildAndBudget(t *testing.T) {
 				if op.Status != compaction.Applied || !op.Acknowledged {
 					t.Fatalf("operation=%+v", op)
 				}
-				if _, err := f.k.Runs.Record(f.ctx, compactSession, op.Request.Key(compactSession).RunID); !errors.Is(err, store.ErrRunNotFound) {
+				if _, err := f.k.TurnStore.Record(f.ctx, compactSession, turn.TurnID(op.Request.Key(compactSession).OwnerID)); !errors.Is(err, store.ErrTurnNotFound) {
 					t.Fatalf("summary created a normal Run: %v", err)
 				}
 			}
@@ -794,8 +793,8 @@ func TestCompactionIdentityAndPendingGuard(t *testing.T) {
 		t.Fatal("conflicting Start mutated intent or dispatched")
 	}
 	current := f.startTurn("guarded", false)
-	bound := f.k.Runs.Bind(f.w)
-	snap, err := bound.Load(f.ctx, current.RunID)
+	bound := f.k.TurnStore.Bind(f.w)
+	snap, err := bound.Load(f.ctx, current.Ref.TurnID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -804,16 +803,16 @@ func TestCompactionIdentityAndPendingGuard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := schema.Identity().DeriveModelRequestCommandID(current.RunID, snap.Position)
-	cmd := run.PrepareModelRequest{StepID: schema.Identity().DeriveModelStepID(current.RunID, id), Model: compactModel, Request: r, RequestDigest: digest, InputIDs: []run.InputID{"guarded"}}
-	env, err := schema.Wire().Envelope(current.RunID, id, cmd)
+	id := schema.Identity().DeriveModelRequestCommandID(current.Ref.TurnID, snap.Position)
+	cmd := turn.PrepareModelRequest{StepID: schema.Identity().DeriveModelStepID(current.Ref.TurnID, id), Model: compactModel, Request: r, RequestDigest: digest, InputIDs: []turn.InputID{"guarded"}}
+	env, err := schema.Wire().Envelope(current.Ref.TurnID, id, cmd)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := bound.Commit(f.ctx, store.CommitRequest{Base: snap.Position, Command: env}); !errors.Is(err, compaction.ErrPending) {
 		t.Fatalf("Prepare while pending=%v", err)
 	}
-	after, err := bound.Load(f.ctx, current.RunID)
+	after, err := bound.Load(f.ctx, current.Ref.TurnID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -848,22 +847,22 @@ type compactGateTool struct {
 	release chan struct{}
 }
 
-func (*compactGateTool) Ref() run.ToolRef { return "lookup" }
+func (*compactGateTool) Ref() turn.ToolRef { return "lookup" }
 func (*compactGateTool) Definition() sdk.ToolDefinition {
 	return sdk.ToolDefinition{Name: "lookup", Parameters: &jsonschema.Schema{Type: "object"}}
 }
-func (*compactGateTool) ResponsePolicy() run.ResponsePolicy        { return run.DirectExecution }
-func (*compactGateTool) Replay() run.ReplayPolicy                  { return run.ReplayAllowed }
-func (*compactGateTool) Placement() run.ToolPlacement              { return run.PlacementProcess }
-func (*compactGateTool) ValidateArguments(run.CanonicalJSON) error { return nil }
+func (*compactGateTool) ResponsePolicy() turn.ResponsePolicy        { return turn.DirectExecution }
+func (*compactGateTool) Replay() turn.ReplayPolicy                  { return turn.ReplayAllowed }
+func (*compactGateTool) Placement() turn.ToolPlacement              { return turn.PlacementProcess }
+func (*compactGateTool) ValidateArguments(turn.CanonicalJSON) error { return nil }
 func (g *compactGateTool) Execute(ctx context.Context, _ local.ToolExecutionRequest) local.ToolExecutionOutcome {
 	g.started <- struct{}{}
 	select {
 	case <-g.release:
 		body, _ := json.Marshal(strings.Repeat("tool-result-", 100))
-		return local.ToolExecutionSucceeded{Result: run.ToolExecutionResult{Output: run.MustParseCanonicalJSON(string(body))}}
+		return local.ToolExecutionSucceeded{Result: turn.ToolExecutionResult{Output: turn.MustParseCanonicalJSON(string(body))}}
 	case <-ctx.Done():
-		return local.ToolExecutionFailed{Failure: run.ToolFailure{Class: "cancelled", Message: ctx.Err().Error()}}
+		return local.ToolExecutionFailed{Failure: turn.ToolFailure{Class: "cancelled", Message: ctx.Err().Error()}}
 	}
 }
 
@@ -902,8 +901,8 @@ func TestCompactionStartsAfterReattachedToolOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bound := f.k.Runs.Bind(f.w)
-	modelCall, err := lp.Advance(f.ctx, bound, current.RunID, nil)
+	bound := f.k.TurnStore.Bind(f.w)
+	modelCall, err := lp.Advance(f.ctx, bound, current.Ref.TurnID, nil)
 	if err != nil || len(modelCall.Dispatched) != 1 {
 		t.Fatalf("model dispatch=%+v, %v", modelCall, err)
 	}
@@ -911,14 +910,14 @@ func TestCompactionStartsAfterReattachedToolOutcome(t *testing.T) {
 	if _, err := lp.Deliver(f.ctx, bound, out, nil); err != nil {
 		t.Fatal(err)
 	}
-	toolCall, err := lp.Advance(f.ctx, bound, current.RunID, nil)
+	toolCall, err := lp.Advance(f.ctx, bound, current.Ref.TurnID, nil)
 	if err != nil || len(toolCall.Dispatched) != 1 {
 		t.Fatalf("tool dispatch=%+v, %v", toolCall, err)
 	}
 	waitCompact(t, f.ctx, tool.started)
 	f.reopenWriter()
 	policy := &driver.BudgetPolicy{
-		Budget: func(context.Context, run.ModelRef) (prompt.TokenBudget, error) {
+		Budget: func(context.Context, turn.ModelRef) (prompt.TokenBudget, error) {
 			return prompt.TokenBudget{ContextWindow: 300, OutputReserve: 30}, nil
 		},
 		Estimate: func(_ context.Context, request *model.ModelRequest) (int, error) {

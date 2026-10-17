@@ -30,8 +30,8 @@ func testIndex(t *testing.T, f Fixture) {
 	create(t, f.Store, "s")
 	w := open(t, f.Store, "s", false)
 	appendCommit(t, w, "c1", batch(chatStream(), "twilight/x/a", `{"a":1}`))
-	appendCommit(t, w, "c2", batch(chatStream(), "twilight/x/b", `{"b":2}`), batch(runStream("r7"), "twilight/run/run_created", `{"runId":"r7"}`))
-	c3 := appendCommit(t, w, "c3", batch(runStream("r7"), "twilight/run/x", `{"runId":"r7"}`))
+	appendCommit(t, w, "c2", batch(chatStream(), "twilight/x/b", `{"b":2}`), batch(turnStream("r7"), "twilight/turn/turn_started", `{"turnId":"r7"}`))
+	c3 := appendCommit(t, w, "c3", batch(turnStream("r7"), "twilight/turn/x", `{"turnId":"r7"}`))
 	want := w.Head()
 	if err := w.Close(ctx); err != nil {
 		t.Fatal(err)
@@ -66,8 +66,8 @@ func testIndex(t *testing.T, f Fixture) {
 			if n, ok := w.StreamHead(chatStream()); !ok || n != 2 {
 				t.Fatalf("chat stream head = %d, %v; want 2", n, ok)
 			}
-			if n, ok := w.StreamHead(runStream("r7")); !ok || n != 2 {
-				t.Fatalf("run stream head = %d, %v; want 2", n, ok)
+			if n, ok := w.StreamHead(turnStream("r7")); !ok || n != 2 {
+				t.Fatalf("Turn stream head = %d, %v; want 2", n, ok)
 			}
 			if c, ok, err := w.LookupCommit("c3"); err != nil || !ok || c.Seq != c3.Seq {
 				t.Fatalf("lookup c3 = %+v, %v, %v", c, ok, err)

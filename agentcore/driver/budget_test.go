@@ -7,8 +7,8 @@ import (
 
 	"github.com/felinics/twilight/agentcore/driver"
 	"github.com/felinics/twilight/agentcore/prompt"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/model"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/model"
 )
 
 func TestBudgetPolicyUsesCompleteCandidateAndOutputCap(t *testing.T) {
@@ -20,7 +20,7 @@ func TestBudgetPolicyUsesCompleteCandidateAndOutputCap(t *testing.T) {
 		Tools:    []model.ToolDefinition{{Name: "tool"}},
 	}}
 	policy := &driver.BudgetPolicy{
-		Budget: func(_ context.Context, ref run.ModelRef) (prompt.TokenBudget, error) {
+		Budget: func(_ context.Context, ref turn.ModelRef) (prompt.TokenBudget, error) {
 			if ref != "logical-model" {
 				t.Fatalf("model = %q", ref)
 			}
@@ -53,7 +53,7 @@ func TestBudgetPolicyUsesCompleteCandidateAndOutputCap(t *testing.T) {
 		t.Fatal("negative output cap accepted")
 	}
 	outputCap = 30
-	policy.Budget = func(context.Context, run.ModelRef) (prompt.TokenBudget, error) {
+	policy.Budget = func(context.Context, turn.ModelRef) (prompt.TokenBudget, error) {
 		return prompt.TokenBudget{ContextWindow: 100, OutputReserve: -1}, nil
 	}
 	if _, err := policy.Decide(ctx, prompt.Input{}, &candidate); err == nil {
@@ -72,7 +72,7 @@ func TestBudgetPolicyPropagatesConfigurationAndEstimatorFailures(t *testing.T) {
 		t.Fatal("missing summary builder accepted")
 	}
 	failure := errors.New("estimator unavailable")
-	policy.Budget = func(context.Context, run.ModelRef) (prompt.TokenBudget, error) {
+	policy.Budget = func(context.Context, turn.ModelRef) (prompt.TokenBudget, error) {
 		return prompt.TokenBudget{ContextWindow: 100}, nil
 	}
 	policy.Estimate = func(context.Context, *model.ModelRequest) (int, error) { return 0, failure }
@@ -85,7 +85,7 @@ func TestBudgetPolicyPropagatesConfigurationAndEstimatorFailures(t *testing.T) {
 	if _, err := policy.BuildSummary(ctx, &driver.CompactionContext{}); !errors.Is(err, failure) {
 		t.Fatalf("summary failure = %v", err)
 	}
-	policy.Budget = func(context.Context, run.ModelRef) (prompt.TokenBudget, error) { return prompt.TokenBudget{}, failure }
+	policy.Budget = func(context.Context, turn.ModelRef) (prompt.TokenBudget, error) { return prompt.TokenBudget{}, failure }
 	if _, err := policy.Decide(ctx, prompt.Input{}, candidate); !errors.Is(err, failure) {
 		t.Fatalf("limits failure = %v", err)
 	}

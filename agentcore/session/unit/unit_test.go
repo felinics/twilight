@@ -5,14 +5,16 @@ import (
 	"errors"
 	"github.com/felinics/twilight/agentcore/artifact/artifacttest"
 	"github.com/felinics/twilight/agentcore/chatlog"
+	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/module"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/sessionstore"
+	"github.com/felinics/twilight/agentcore/preset/ref"
 	"github.com/felinics/twilight/agentcore/session"
 	"github.com/felinics/twilight/agentcore/session/filestore/filestoretest"
 	"github.com/felinics/twilight/agentcore/session/unit"
 	"github.com/felinics/twilight/agentcore/session/writer"
 	"github.com/felinics/twilight/agentcore/session/writer/writertest"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
 	"testing"
 )
 
@@ -39,7 +41,7 @@ func submitted(id chatlog.InputID) unit.Part {
 	return unit.PartFunc(func(_ context.Context, _ writer.View, now int64) ([]writer.TypedBatch, error) {
 		return []writer.TypedBatch{{Domain: chatlog.Stream, Events: []writer.TypedEvent{{
 			Type: chatlog.TypeInputSubmitted, RecordedAtUnixMilli: now,
-			Value: chatlog.InputSubmittedPayload{InputID: id, Content: run.MustParseCanonicalJSON(`{"text":"x"}`), SubmittedAtUnixMilli: now}}}}}, nil
+			Value: chatlog.InputSubmittedPayload{InputID: id, Content: turn.MustParseCanonicalJSON(`{"text":"x"}`), SubmittedAtUnixMilli: now}}}}}, nil
 	})
 }
 
@@ -50,7 +52,7 @@ func submitted(id chatlog.InputID) unit.Part {
 func TestCommitMergesRefusesAndReplays(t *testing.T) {
 	ctx := context.Background()
 	w := newWriter(t)
-	newRun, err := run.BuildNewRun("r1", "")
+	newTurn, err := turn.BuildNewTurn("r1", "", ref.Ref{ID: "test", Digest: "sha256:test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +61,7 @@ func TestCommitMergesRefusesAndReplays(t *testing.T) {
 		prepared++
 		return submitted("b").Prepare(ctx, v, now)
 	})
-	work := unit.Work{CommitID: "u1", Parts: []unit.Part{submitted("a"), sessionstore.CreateRun(newRun, nil), counting}}
+	work := unit.Work{CommitID: "u1", Parts: []unit.Part{submitted("a"), sessionstore.CreateTurn(newTurn, nil), counting}}
 	res, err := unit.Commit(ctx, w, 7, work)
 	if err != nil || res.Outcome != writer.CommitApplied {
 		t.Fatalf("commit = %+v %v", res, err)
@@ -85,7 +87,7 @@ func TestCommitMergesRefusesAndReplays(t *testing.T) {
 			t.Fatalf("refused unit committed = %v %v", ok, err)
 		}
 		if _, ok := v.StreamHead(sessionstore.Stream("r1")); !ok {
-			t.Fatal("run stream not indexed")
+			t.Fatal("Turn stream not indexed")
 		}
 		return nil, nil
 	})
@@ -117,11 +119,39 @@ func TestCommitReplaysByCommitID(t *testing.T) {
 	// A CommitID written by a plain writer.Commit is a replay for a unit too.
 	if _, err := w.Commit(ctx, func(writer.View) (*writer.SemanticGroup, error) {
 		return &writer.SemanticGroup{CommitID: "plain", Batches: []writer.TypedBatch{{Domain: chatlog.Stream, Events: []writer.TypedEvent{{
-			Type: chatlog.TypeInputSubmitted, Value: chatlog.InputSubmittedPayload{InputID: "p", Content: run.MustParseCanonicalJSON(`{"text":"x"}`)}}}}}}, nil
+			Type: chatlog.TypeInputSubmitted, Value: chatlog.InputSubmittedPayload{InputID: "p", Content: turn.MustParseCanonicalJSON(`{"text":"x"}`)}}}}}}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if none, err := unit.Commit(ctx, w, 2, unit.Work{CommitID: "plain", Parts: []unit.Part{boom}}); err != nil || none.Outcome != writer.CommitAlreadyApplied {
 		t.Fatalf("replay of a plain commit = %+v %v, want already applied", none, err)
+	}
+}
+
+func TestCommitReplayCheckRejectsWithoutPreparingParts(t *testing.T) {
+	ctx := context.Background()
+	w := newWriter(t)
+	original, err := unit.Commit(ctx, w, 1, unit.Work{CommitID: "checked", Parts: []unit.Part{submitted("a")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflict := errors.New("changed operation content")
+	checks := 0
+	work := unit.Work{CommitID: "checked", ReplayCheck: func(commit ledger.Commit) error {
+		checks++
+		if commit.CommitID != original.Commit.CommitID || commit.Seq != original.Commit.Seq {
+			t.Fatalf("replay commit = %+v", commit)
+		}
+		return conflict
+	}, Parts: []unit.Part{unit.PartFunc(func(context.Context, writer.View, int64) ([]writer.TypedBatch, error) {
+		t.Fatal("replay prepared a part")
+		return nil, nil
+	})}}
+	if _, err := unit.Commit(ctx, w, 2, work); !errors.Is(err, conflict) || checks != 1 {
+		t.Fatalf("replay err=%v checks=%d", err, checks)
+	}
+	again, err := unit.Commit(ctx, w, 3, unit.Work{CommitID: "checked"})
+	if err != nil || again.Outcome != writer.CommitAlreadyApplied || again.Commit.Seq != original.Commit.Seq {
+		t.Fatalf("original changed: %+v %v", again, err)
 	}
 }

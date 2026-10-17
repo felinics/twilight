@@ -3,7 +3,7 @@ package preset
 import (
 	"testing"
 
-	"github.com/felinics/twilight/agentcore/run"
+	"github.com/felinics/twilight/agentcore/turn"
 )
 
 // TestPresetDigestGolden freezes the preset digest and its field boundary:
@@ -27,7 +27,7 @@ func TestPresetDigestGolden(t *testing.T) {
 	}{
 		{"system prompt", func(p *AgentPreset) { p.SystemPrompt = "be brief" }},
 		{"builder", func(p *AgentPreset) { p.PromptBuilder = "other/builder" }},
-		{"scheduling mode", func(p *AgentPreset) { p.Scheduling.Mode = run.ToolScheduleSequential }},
+		{"scheduling mode", func(p *AgentPreset) { p.Scheduling.Mode = turn.ToolScheduleSequential }},
 		{"scheduling bound", func(p *AgentPreset) { p.Scheduling.MaxParallel = 2 }},
 		{"malformed retries", func(p *AgentPreset) { p.MalformedRetries = 1 }},
 	}

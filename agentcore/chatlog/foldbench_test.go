@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/module"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/model"
-	"github.com/felinics/twilight/agentcore/run/sessionstore"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/model"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
 	"testing"
 )
 
@@ -18,7 +18,7 @@ func benchEvents(n int) []module.DecodedEvent {
 	for i := range out {
 		out[i] = module.DecodedEvent{
 			Position: ledger.Position{Commit: ledger.CommitSeq(i)},
-			Value:    sessionstore.Event{RunID: "r", Fact: run.ModelStepCompleted{StepID: run.StepID(fmt.Sprint(i)), FinishReason: model.FinishReasonStop, ResultDigest: "sha256:x"}},
+			Value:    sessionstore.Event{TurnID: "r", Fact: turn.ModelStepCompleted{StepID: turn.StepID(fmt.Sprint(i)), FinishReason: model.FinishReasonStop, ResultDigest: "sha256:x"}},
 		}
 	}
 	return out

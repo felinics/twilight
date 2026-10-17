@@ -9,7 +9,7 @@ import (
 	"github.com/felinics/twilight/agentcore/executor"
 	executionstore "github.com/felinics/twilight/agentcore/executor/store"
 	"github.com/felinics/twilight/agentcore/executor/store/storetest"
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 // Embedding only Store deliberately hides the optional Directory.
@@ -38,7 +38,7 @@ func TestWorkerOutstandingCapability(t *testing.T) {
 	if _, err := w.ListOutstanding(ctx, effect.AssignmentKey{}, 10); !errors.Is(err, effect.ErrOutstandingUnsupported) {
 		t.Fatalf("missing Directory returned %v, want capability error", err)
 	}
-	key := effect.AssignmentKey{Session: "session", RunID: "run", Effect: "effect"}
+	key := effect.AssignmentKey{Session: "session", OwnerKind: effect.OwnerTurn, OwnerID: string("run"), Effect: "effect"}
 	s := &directoryStore{Store: storetest.NewMap(nil), page: effect.OutstandingPage{Items: []effect.ExecutionSummary{{Key: key, Status: effect.ExecutionAccepted, Revision: 7}}, Next: key, More: true}}
 	w2, err := executor.NewWorker(ctx, s, routes(newTestBackend()))
 	if err != nil {

@@ -11,13 +11,14 @@ import (
 	"github.com/felinics/twilight/agentcore/chatlog"
 	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/module"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/sessionstore"
+	"github.com/felinics/twilight/agentcore/preset/ref"
 	"github.com/felinics/twilight/agentcore/session"
 	"github.com/felinics/twilight/agentcore/session/filestore/filestoretest"
 	"github.com/felinics/twilight/agentcore/session/unit"
 	"github.com/felinics/twilight/agentcore/session/writer"
 	"github.com/felinics/twilight/agentcore/session/writer/writertest"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
 )
 
 func TestPlanCompaction(t *testing.T) {
@@ -155,16 +156,20 @@ func compactionContext(t *testing.T, w writer.Writer) chatlog.Context {
 	return current
 }
 
-func appendCompactionInput(t *testing.T, w writer.Writer, id run.InputID) {
+func appendCompactionInput(t *testing.T, w writer.Writer, id turn.InputID) {
 	t.Helper()
 	commands := chatlog.Commands{Now: time.Now}
-	in, err := commands.Submit(context.Background(), w, id, run.MustParseCanonicalJSON(`{"text":"input"}`))
+	in, err := commands.Submit(context.Background(), w, id, turn.MustParseCanonicalJSON(`{"text":"input"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	creation, err := turn.BuildNewTurn(turn.TurnID("turn-"+id), "", ref.Ref{ID: "test", Digest: "sha256:test"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	res, err := unit.Commit(context.Background(), w, 1, unit.Work{
-		CommitID: ledger.CommitID("deliver/" + id),
-		Parts:    []unit.Part{chatlog.DeliverInputs("t", "r", []run.AgentInput{in})},
+		CommitID: ledger.CommitID("accept/" + id),
+		Parts:    []unit.Part{chatlog.AdmitInputs([]turn.AgentInput{in}), sessionstore.CreateTurn(creation, []turn.AgentInput{in})},
 	})
 	if err != nil || res.Outcome != writer.CommitApplied {
 		t.Fatalf("deliver = %+v, %v", res, err)

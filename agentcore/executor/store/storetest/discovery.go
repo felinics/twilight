@@ -5,7 +5,7 @@ import (
 	"sort"
 
 	executionstore "github.com/felinics/twilight/agentcore/executor/store"
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 var _ executionstore.Directory = (*Map)(nil)
@@ -14,8 +14,11 @@ func keyLess(a, b effect.AssignmentKey) bool {
 	if a.Session != b.Session {
 		return a.Session < b.Session
 	}
-	if a.RunID != b.RunID {
-		return a.RunID < b.RunID
+	if a.OwnerKind != b.OwnerKind {
+		return a.OwnerKind < b.OwnerKind
+	}
+	if a.OwnerID != b.OwnerID {
+		return a.OwnerID < b.OwnerID
 	}
 	return a.Effect < b.Effect
 }

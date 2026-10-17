@@ -6,11 +6,12 @@ import (
 	"github.com/felinics/twilight/agentcore/jsonstable"
 	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/module"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/frozen"
-	"github.com/felinics/twilight/agentcore/run/model"
-	"github.com/felinics/twilight/agentcore/run/schema"
-	"github.com/felinics/twilight/agentcore/run/sessionstore"
+	"github.com/felinics/twilight/agentcore/preset/ref"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/frozen"
+	"github.com/felinics/twilight/agentcore/turn/model"
+	"github.com/felinics/twilight/agentcore/turn/schema"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
 	"testing"
 )
 
@@ -28,20 +29,28 @@ type step struct {
 	value any
 }
 
-func runStep(runID run.RunID, f run.Fact) step {
-	return step{sessionstore.EventType(f), sessionstore.Event{RunID: runID, Fact: f}}
+func runStep(turnID turn.TurnID, f turn.Fact) step {
+	return step{sessionstore.EventType(f), sessionstore.Event{TurnID: turnID, Fact: f}}
 }
 
-func completed(runID run.RunID, stepID run.StepID, digest jsonstable.Digest) step {
-	return runStep(runID, run.ModelStepCompleted{StepID: stepID, FinishReason: model.FinishReasonStop, ResultDigest: digest})
-}
-
-func opened(runID run.RunID, source run.StepID, calls ...run.CallID) step {
-	bindings := make([]run.ToolCallBinding, len(calls))
-	for i, c := range calls {
-		bindings[i] = run.ToolCallBinding{CallID: c, ToolRef: "echo", DefinitionDigest: "sha256:def", Arguments: jsonstable.MustParse(`{}`)}
+func accepted(id turn.TurnID, input InputID) step {
+	digest, err := DigestInput(input, jsonstable.MustParse(`{"text":"hi"}`))
+	if err != nil {
+		panic(err)
 	}
-	return runStep(runID, run.ToolStepOpened{StepID: run.StepID(string(source) + "/tools"), Source: source, Calls: bindings})
+	return runStep(id, turn.InputAccepted{Input: turn.AgentInput{ID: turn.InputID(input), Digest: digest}})
+}
+
+func completed(turnID turn.TurnID, stepID turn.StepID, digest jsonstable.Digest) step {
+	return runStep(turnID, turn.ModelStepCompleted{StepID: stepID, FinishReason: model.FinishReasonStop, ResultDigest: digest})
+}
+
+func opened(turnID turn.TurnID, source turn.StepID, calls ...turn.CallID) step {
+	bindings := make([]turn.ToolCallBinding, len(calls))
+	for i, c := range calls {
+		bindings[i] = turn.ToolCallBinding{CallID: c, ToolRef: "echo", DefinitionDigest: "sha256:def", Arguments: jsonstable.MustParse(`{}`)}
+	}
+	return runStep(turnID, turn.ToolStepOpened{StepID: turn.StepID(string(source) + "/tools"), Source: source, Calls: bindings})
 }
 
 // foldSteps encodes, decodes and folds steps through both projections,
@@ -109,19 +118,19 @@ func TestPartsCodecRoundTripAndRejects(t *testing.T) {
 	}
 }
 
-// Run facts project into structural entries. The assistant
+// Turn facts project into structural entries. The assistant
 // names the frozen result and the calls its ToolStepOpened assigned; each
 // call's terminal fact projects one tool_result; a verified supersession
 // replaces the unknown result in place.
 func TestRunFactsProjectEntries(t *testing.T) {
 	ctxState, surf, err := foldSteps(t, []step{
 		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), SubmittedAtUnixMilli: 1}},
-		{TypeInputDelivered, InputDeliveredPayload{InputID: "in-1", TurnID: "t1", RunID: "r1"}},
-		runStep("r1", run.RunCreated{RunID: "r1"}),
-		completed("r1", "s1", "sha256:res"),
-		opened("r1", "s1", "c1", "c2"),
-		runStep("r1", run.ToolCallCompleted{StepID: "s1/tools", CallID: "c1", OutputDigest: "sha256:out"}),
-		runStep("r1", run.ToolCallFailed{StepID: "s1/tools", CallID: "c2", Failure: run.ToolFailure{Class: run.FailureEffectUnknown, Message: "lost"}, Outcome: run.ToolOutcomeUnknown}),
+		accepted("t1", "in-1"),
+		runStep("t1", turn.TurnStarted{Preset: ref.Ref{ID: "test", Digest: "sha256:test"}, TurnID: "t1"}),
+		completed("t1", "s1", "sha256:res"),
+		opened("t1", "s1", "c1", "c2"),
+		runStep("t1", turn.ToolCallCompleted{StepID: "s1/tools", CallID: "c1", OutputDigest: "sha256:out"}),
+		runStep("t1", turn.ToolCallFailed{StepID: "s1/tools", CallID: "c2", Failure: turn.ToolFailure{Class: turn.FailureEffectUnknown, Message: "lost"}, Outcome: turn.ToolOutcomeUnknown}),
 		{TypeToolResultSuperseded, ToolResultSupersededPayload{ToolResultID: "c2", Status: ToolSuccess, OutputDigest: "sha256:verified"}},
 	})
 	if err != nil {
@@ -132,7 +141,7 @@ func TestRunFactsProjectEntries(t *testing.T) {
 		t.Fatalf("entries = %+v", entries)
 	}
 	a := entries[1].Assistant
-	if entries[1].Kind != EntryAssistant || a.ID != "s1" || a.TurnID != "t1" || a.RunID != "r1" || a.ResultDigest != "sha256:res" ||
+	if entries[1].Kind != EntryAssistant || a.ID != "s1" || a.TurnID != "t1" || a.ResultDigest != "sha256:res" ||
 		len(a.CallIDs) != 2 || a.CallIDs[0] != "c1" || a.CallIDs[1] != "c2" || entries[1].Digest != a.Digest {
 		t.Fatalf("assistant = %+v", a)
 	}
@@ -158,12 +167,10 @@ func TestRunFactsProjectEntries(t *testing.T) {
 	if unknown, _ := surf.ToolResults.Get("c2"); unknown.Status != ToolUnknown || unknown.FailureText() != "effect_unknown: lost" {
 		t.Fatalf("unknown result = %+v", unknown)
 	}
-	if owner, _ := surf.Runs.Get("r1"); owner.TurnID != "t1" {
-		t.Fatalf("run owner = %+v", owner)
-	}
+
 	// Superseding twice, or a result outside the context, is a fold error.
-	if _, _, err := foldSteps(t, []step{step{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), SubmittedAtUnixMilli: 1}}, step{TypeInputDelivered, InputDeliveredPayload{InputID: "in-1", TurnID: "t1", RunID: "r1"}}, runStep("r1", run.RunCreated{RunID: "r1"}), completed("r1", "s1", "sha256:res"), opened("r1", "s1", "c1"),
-		runStep("r1", run.ToolCallFailed{StepID: "s1/tools", CallID: "c1", Failure: run.ToolFailure{Class: "x"}}),
+	if _, _, err := foldSteps(t, []step{step{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), SubmittedAtUnixMilli: 1}}, accepted("t1", "in-1"), runStep("t1", turn.TurnStarted{Preset: ref.Ref{ID: "test", Digest: "sha256:test"}, TurnID: "t1"}), completed("t1", "s1", "sha256:res"), opened("t1", "s1", "c1"),
+		runStep("t1", turn.ToolCallFailed{StepID: "s1/tools", CallID: "c1", Failure: turn.ToolFailure{Class: "x"}}),
 		{TypeToolResultSuperseded, ToolResultSupersededPayload{ToolResultID: "c1", Status: ToolError}},
 		{TypeToolResultSuperseded, ToolResultSupersededPayload{ToolResultID: "c1", Status: ToolError}}}); err == nil {
 		t.Fatal("second supersession accepted")
@@ -173,10 +180,10 @@ func TestRunFactsProjectEntries(t *testing.T) {
 	}
 	// A tool step for an unknown assistant, and a result folded twice, are
 	// fold errors.
-	if _, _, err := foldSteps(t, []step{opened("r1", "nope", "c1")}); err == nil {
+	if _, _, err := foldSteps(t, []step{opened("t1", "nope", "c1")}); err == nil {
 		t.Fatal("tool step for an unknown assistant accepted")
 	}
-	if _, _, err := foldSteps(t, []step{completed("r1", "s1", "sha256:a"), completed("r1", "s1", "sha256:a")}); err == nil {
+	if _, _, err := foldSteps(t, []step{completed("t1", "s1", "sha256:a"), completed("t1", "s1", "sha256:a")}); err == nil {
 		t.Fatal("assistant folded twice")
 	}
 }
@@ -190,10 +197,10 @@ func TestSurfaceAndContextFold(t *testing.T) {
 		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: content, SubmittedAtUnixMilli: 1}},
 		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-2", Content: content, SubmittedAtUnixMilli: 2}},
 		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-3", Content: content, SubmittedAtUnixMilli: 3}},
-		{TypeInputDelivered, InputDeliveredPayload{InputID: "in-1", TurnID: "t1", RunID: "r1"}},
+		accepted("t1", "in-1"),
 		{TypeInputWithdrawn, InputWithdrawnPayload{InputID: "in-3", Reason: "user"}},
-		runStep("r1", run.RunCreated{RunID: "r1"}),
-		completed("r1", "s1", "sha256:res"),
+		runStep("t1", turn.TurnStarted{Preset: ref.Ref{ID: "test", Digest: "sha256:test"}, TurnID: "t1"}),
+		completed("t1", "s1", "sha256:res"),
 	}
 	ctxState, surface, err := foldSteps(t, steps)
 	if err != nil {
@@ -215,7 +222,7 @@ func TestSurfaceAndContextFold(t *testing.T) {
 	if _, pending := ctxState.Pending["in-2"]; !pending || len(ctxState.Pending) != 1 {
 		t.Fatalf("pending = %+v", ctxState.Pending)
 	}
-	if _, _, err := foldSteps(t, append(steps, step{TypeInputDelivered, InputDeliveredPayload{InputID: "in-1", TurnID: "t1", RunID: "r1"}})); err == nil {
+	if _, _, err := foldSteps(t, append(steps, accepted("t1", "in-1"))); err == nil {
 		t.Fatal("second delivery accepted")
 	}
 }
@@ -236,7 +243,6 @@ func TestEventCodecCanonicalRoundTrip(t *testing.T) {
 	}
 	samples := map[ledger.EventType]any{
 		TypeInputSubmitted:        InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), SubmittedAtUnixMilli: 1},
-		TypeInputDelivered:        InputDeliveredPayload{InputID: "in-1", TurnID: "t1", RunID: "r1"},
 		TypeInputWithdrawn:        InputWithdrawnPayload{InputID: "in-1", Reason: "user"},
 		TypeInputRejected:         InputRejectedPayload{InputID: "in-1"},
 		TypeToolResultSuperseded:  ToolResultSupersededPayload{ToolResultID: "tr1", Status: ToolSuccess, OutputDigest: "sha256:out"},
@@ -286,7 +292,7 @@ func TestEventCodecCanonicalRoundTrip(t *testing.T) {
 
 type fakeContent struct {
 	results map[jsonstable.Digest]model.ModelResult
-	outputs map[jsonstable.Digest]run.CanonicalJSON
+	outputs map[jsonstable.Digest]turn.CanonicalJSON
 	reads   int
 }
 
@@ -299,30 +305,30 @@ func (c *fakeContent) ModelResult(_ context.Context, d jsonstable.Digest) (model
 	return r, nil
 }
 
-func (c *fakeContent) ToolOutput(_ context.Context, d jsonstable.Digest) (run.CanonicalJSON, error) {
+func (c *fakeContent) ToolOutput(_ context.Context, d jsonstable.Digest) (turn.CanonicalJSON, error) {
 	c.reads++
 	o, ok := c.outputs[d]
 	if !ok {
-		return run.CanonicalJSON{}, frozen.ErrMissing
+		return turn.CanonicalJSON{}, frozen.ErrMissing
 	}
 	return o, nil
 }
 
-func (c *fakeContent) ToolResponse(ctx context.Context, d jsonstable.Digest) (run.CanonicalJSON, error) {
+func (c *fakeContent) ToolResponse(ctx context.Context, d jsonstable.Digest) (turn.CanonicalJSON, error) {
 	return c.ToolOutput(ctx, d)
 }
 
-// The materializer pairs the Run's CallIDs with the frozen result's tool
+// The materializer pairs the Turn's CallIDs with the frozen result's tool
 // calls, resolves successful outputs, renders failures from the entry, reads
 // each digest once, and reports a lost body without touching the projection.
 func TestMaterialize(t *testing.T) {
 	ctxState, _, err := foldSteps(t, []step{
-		step{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), SubmittedAtUnixMilli: 1}}, step{TypeInputDelivered, InputDeliveredPayload{InputID: "in-1", TurnID: "t1", RunID: "r1"}}, runStep("r1", run.RunCreated{RunID: "r1"}),
-		completed("r1", "s1", "sha256:res"),
-		opened("r1", "s1", "c1", "c2"),
-		runStep("r1", run.ToolCallCompleted{StepID: "s1/tools", CallID: "c1", OutputDigest: "sha256:out"}),
-		runStep("r1", run.ToolCallAnswered{StepID: "s1/tools", CallID: "c2", ResponseID: "resp", ResponseDigest: "sha256:ans"}),
-		completed("r1", "s2", "sha256:res"),
+		step{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), SubmittedAtUnixMilli: 1}}, accepted("t1", "in-1"), runStep("t1", turn.TurnStarted{Preset: ref.Ref{ID: "test", Digest: "sha256:test"}, TurnID: "t1"}),
+		completed("t1", "s1", "sha256:res"),
+		opened("t1", "s1", "c1", "c2"),
+		runStep("t1", turn.ToolCallCompleted{StepID: "s1/tools", CallID: "c1", OutputDigest: "sha256:out"}),
+		runStep("t1", turn.ToolCallAnswered{StepID: "s1/tools", CallID: "c2", ResponseID: "resp", ResponseDigest: "sha256:ans"}),
+		completed("t1", "s2", "sha256:res"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -332,13 +338,13 @@ func TestMaterialize(t *testing.T) {
 			{ToolCallID: "p1", ToolName: "echo", Input: model.ToolArguments{JSON: jsonstable.MustParse(`{"a":1}`)}},
 			{ToolCallID: "p2", ToolName: "ask", Input: model.ToolArguments{JSON: jsonstable.MustParse(`{}`)}},
 		}}},
-		outputs: map[jsonstable.Digest]run.CanonicalJSON{"sha256:out": jsonstable.MustParse(`{"ok":true}`), "sha256:ans": jsonstable.MustParse(`"yes"`)},
+		outputs: map[jsonstable.Digest]turn.CanonicalJSON{"sha256:out": jsonstable.MustParse(`{"ok":true}`), "sha256:ans": jsonstable.MustParse(`"yes"`)},
 	}
 	entries, err := NewMaterializer(content).Entries(context.Background(), ctxState.Entries)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// entries[0] is the delivered input that named the Run; the assistant follows.
+	// entries[0] is the delivered input that named the Turn; the assistant follows.
 	entries = entries[1:]
 	first := entries[0].Calls
 	if len(entries) != 4 || entries[0].Text() != "calling" || len(first) != 2 ||
@@ -354,7 +360,7 @@ func TestMaterialize(t *testing.T) {
 	if content.reads != 3 || len(entries[3].Calls) != 2 || entries[3].Calls[0].CallID != CallID(schema.Identity().DeriveCallID("s2", 0)) {
 		t.Fatalf("reads = %d, second assistant = %+v", content.reads, entries[3])
 	}
-	failed := Entry{Kind: EntryToolResult, ToolResult: &ToolResult{ID: "c9", CallID: "c9", Status: ToolError, Failure: &run.ToolFailure{Class: "boom", Message: "x"}}}
+	failed := Entry{Kind: EntryToolResult, ToolResult: &ToolResult{ID: "c9", CallID: "c9", Status: ToolError, Failure: &turn.ToolFailure{Class: "boom", Message: "x"}}}
 	if m, err := NewMaterializer(content).Entry(context.Background(), &failed); err != nil || m.Output != nil || m.Text() != "boom: x" {
 		t.Fatalf("failed result = %+v %v", m, err)
 	}
@@ -378,9 +384,9 @@ func mustSummary(t *testing.T, id SummaryID, text string) Summary {
 
 // entryDigest is the digest the fold assigns to the assistant of one
 // model_step_completed under Turn t1 in Run r1, with no tool step.
-func entryDigest(t *testing.T, stepID run.StepID, result jsonstable.Digest) jsonstable.Digest {
+func entryDigest(t *testing.T, stepID turn.StepID, result jsonstable.Digest) jsonstable.Digest {
 	t.Helper()
-	a, err := assistantOf(RunOwner{TurnID: "t1"}, "r1", &run.ModelStepCompleted{StepID: stepID, FinishReason: model.FinishReasonStop, ResultDigest: result})
+	a, err := assistantOf("t1", &turn.ModelStepCompleted{StepID: stepID, FinishReason: model.FinishReasonStop, ResultDigest: result})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,16 +423,16 @@ func TestCompactionFold(t *testing.T) {
 	// compaction itself lands at step 7.
 	prefix := []step{
 		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: content, SubmittedAtUnixMilli: 1}},
-		{TypeInputDelivered, InputDeliveredPayload{InputID: "in-1", TurnID: "t1", RunID: "r1"}},
-		runStep("r1", run.RunCreated{RunID: "r1"}),
-		completed("r1", "s1", "sha256:one"),
+		accepted("t1", "in-1"),
+		runStep("t1", turn.TurnStarted{Preset: ref.Ref{ID: "test", Digest: "sha256:test"}, TurnID: "t1"}),
+		completed("t1", "s1", "sha256:one"),
 		{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-q", Content: content, SubmittedAtUnixMilli: 2}},
 		{TypeSummary, SummaryPayload{Summary: sum}},
 	}
 	valid := mustCompaction(t, "ck1", at(4), base, sum, base[1:])
 
 	t.Run("valid compaction replaces the base and keeps the queue", func(t *testing.T) {
-		ctxState, surf, err := foldSteps(t, append(prefix, step{TypeCompactionCreated, valid}, completed("r1", "s2", "sha256:after")))
+		ctxState, surf, err := foldSteps(t, append(prefix, step{TypeCompactionCreated, valid}, completed("t1", "s2", "sha256:after")))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -451,7 +457,7 @@ func TestCompactionFold(t *testing.T) {
 	t.Run("invalidating the latest compaction restores base plus tail", func(t *testing.T) {
 		ctxState, surf, err := foldSteps(t, append(prefix,
 			step{TypeCompactionCreated, valid},
-			completed("r1", "s2", "sha256:after"),
+			completed("t1", "s2", "sha256:after"),
 			step{TypeCompactionInvalidated, CompactionInvalidatedPayload{CompactionID: "ck1", Reason: "host"}}))
 		if err != nil {
 			t.Fatal(err)
@@ -480,7 +486,7 @@ func TestCompactionFold(t *testing.T) {
 			append(prefix, step{TypeCompactionCreated, mustCompaction(t, "ck4", at(3), base,
 				sum, []EntryDigestPair{{Kind: EntryAssistant, ID: "s1", Digest: "sha256:wrong"}})})},
 		{"gap holds more than the summary",
-			append(append([]step{}, prefix...), completed("r1", "s9", "sha256:x"),
+			append(append([]step{}, prefix...), completed("t1", "s9", "sha256:x"),
 				step{TypeCompactionCreated, mustCompaction(t, "ck5", at(5),
 					append(base, EntryDigestPair{Kind: EntryAssistant, ID: "s9"}), sum, nil)})},
 		{"invalidating an unknown compaction",
@@ -497,8 +503,8 @@ func TestCompactionFold(t *testing.T) {
 	t.Run("superseding a compacted result is rejected", func(t *testing.T) {
 		// The assistant's digest changes when its tool step opens, so the base
 		// is read back from a fold of the same prefix.
-		steps := []step{step{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), SubmittedAtUnixMilli: 1}}, step{TypeInputDelivered, InputDeliveredPayload{InputID: "in-1", TurnID: "t1", RunID: "r1"}}, runStep("r1", run.RunCreated{RunID: "r1"}), completed("r1", "ac", "sha256:call"), opened("r1", "ac", "c1"),
-			runStep("r1", run.ToolCallCompleted{StepID: "ac/tools", CallID: "c1", OutputDigest: "sha256:out"})}
+		steps := []step{step{TypeInputSubmitted, InputSubmittedPayload{InputID: "in-1", Content: jsonstable.MustParse(`{"text":"hi"}`), SubmittedAtUnixMilli: 1}}, accepted("t1", "in-1"), runStep("t1", turn.TurnStarted{Preset: ref.Ref{ID: "test", Digest: "sha256:test"}, TurnID: "t1"}), completed("t1", "ac", "sha256:call"), opened("t1", "ac", "c1"),
+			runStep("t1", turn.ToolCallCompleted{StepID: "ac/tools", CallID: "c1", OutputDigest: "sha256:out"})}
 		folded, _, err := foldSteps(t, steps)
 		if err != nil {
 			t.Fatal(err)

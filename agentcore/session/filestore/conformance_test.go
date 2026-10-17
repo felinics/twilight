@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/felinics/twilight/agentcore/run/sessionstore/storetest"
 	"github.com/felinics/twilight/agentcore/session/filestore"
 	"github.com/felinics/twilight/agentcore/session/sessiontest"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore/storetest"
 )
 
 func newStore(t testing.TB) *filestore.Store {

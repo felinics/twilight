@@ -10,8 +10,8 @@ import (
 	"github.com/felinics/twilight/agentcore/executor/protocol"
 	executionstore "github.com/felinics/twilight/agentcore/executor/store"
 	"github.com/felinics/twilight/agentcore/ledger"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 // Fixture is one adapter under test. Store is a handle over a fresh, empty
@@ -44,8 +44,8 @@ func Run(t *testing.T, factory Factory) {
 	}
 }
 
-func assignment(id run.EffectID) effect.Assignment {
-	return effect.Assignment{Session: "s", RunID: "r", StepID: "step", Effect: id,
+func assignment(id turn.EffectID) effect.Assignment {
+	return effect.Assignment{Session: "s", OwnerKind: effect.OwnerTurn, OwnerID: string("r"), StepID: "step", Effect: id,
 		Body: effect.ModelAssignment{Model: "m", RequestDigest: "sha256:req"}}
 }
 
