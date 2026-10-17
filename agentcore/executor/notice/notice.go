@@ -11,7 +11,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 // DefaultWindow is the number of notices a Ring keeps for late subscribers.

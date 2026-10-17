@@ -5,7 +5,7 @@ import (
 
 	"github.com/felinics/twilight/agentcore/executor/protocol"
 	"github.com/felinics/twilight/agentcore/ledger"
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 // SeedCommits plans the ledger an execution goes through to reach state:

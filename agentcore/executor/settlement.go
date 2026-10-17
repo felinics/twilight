@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/felinics/twilight/agentcore/executor/notice"
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 // DefaultSettlementWindow is the number of settlements a Worker keeps for

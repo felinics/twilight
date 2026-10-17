@@ -9,8 +9,8 @@ import (
 	"github.com/felinics/twilight/agentcore/executor/protocol"
 	executionstore "github.com/felinics/twilight/agentcore/executor/store"
 	"github.com/felinics/twilight/agentcore/ledger"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 // This file is the supervision of one execution from the moment the Worker
@@ -184,7 +184,7 @@ func (w *Worker) awaitBackend(lease executionstore.Lease, claimed *executionstor
 // leaseDone ends the running heartbeat when nothing is left to
 // watch.
 func (w *Worker) replay(ctx context.Context, lease executionstore.Lease, claimed *executionstore.Execution, backend ExecutionBackend, ref string, leaseDone chan struct{}) error {
-	if tool, ok := claimed.Assignment.Tool(); ok && tool.Replay != run.ReplayAllowed {
+	if tool, ok := claimed.Assignment.Tool(); ok && tool.Replay != turn.ReplayAllowed {
 		env := protocol.OutcomeEnvelope{ProtocolVersion: protocol.ProtocolVersion, Key: lease.Key, Unknown: true,
 			Error: &protocol.WireError{Code: "adopted_without_replay", Message: fmt.Sprintf("tool %q declares replay %s; the lost execution is not re-dispatched", tool.ToolRef, tool.Replay)}}
 		err := w.finishOwned(ctx, lease, &env, effect.ExecutionUnknown, nil)
@@ -524,9 +524,9 @@ func (w *Worker) retryAfter(lease executionstore.Lease, backend ExecutionBackend
 func retryableFailure(result effect.OutcomeResult) bool {
 	switch r := result.(type) {
 	case effect.ModelFailed:
-		return r.Retry() == run.RetryAllowed
+		return r.Retry() == turn.RetryAllowed
 	case effect.ToolExecutionFailed:
-		return r.Retry == run.RetryAllowed
+		return r.Retry == turn.RetryAllowed
 	default:
 		return false
 	}

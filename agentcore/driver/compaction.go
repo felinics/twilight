@@ -16,16 +16,16 @@ import (
 	"github.com/felinics/twilight/agentcore/jsonstable"
 	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/prompt"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/effect"
-	"github.com/felinics/twilight/agentcore/run/frozen"
-	"github.com/felinics/twilight/agentcore/run/loop"
-	"github.com/felinics/twilight/agentcore/run/model"
-	"github.com/felinics/twilight/agentcore/run/schema"
 	"github.com/felinics/twilight/agentcore/session"
 	"github.com/felinics/twilight/agentcore/session/unit"
 	"github.com/felinics/twilight/agentcore/session/writer"
 	"github.com/felinics/twilight/agentcore/sessionkernel"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/effect"
+	"github.com/felinics/twilight/agentcore/turn/frozen"
+	"github.com/felinics/twilight/agentcore/turn/loop"
+	"github.com/felinics/twilight/agentcore/turn/model"
+	"github.com/felinics/twilight/agentcore/turn/schema"
 )
 
 // DefaultCompactionAttempts bounds maintenance for one preparation even if
@@ -53,9 +53,9 @@ type CompactionContext struct {
 }
 
 type SummaryRequest struct {
-	Model   run.ModelRef
+	Model   turn.ModelRef
 	Request model.ModelRequest
-	Target  *run.TargetRef
+	Target  *turn.TargetRef
 }
 
 // ContextPolicy inspects the complete candidate request. It supplies token
@@ -67,7 +67,7 @@ type ContextPolicy interface {
 }
 
 type summaryRequests interface {
-	FrozenRequest(context.Context, run.Digest) (model.ModelRequest, error)
+	FrozenRequest(context.Context, turn.Digest) (model.ModelRequest, error)
 }
 
 // MaintenanceResult describes one finite maintenance coordination. Pending
@@ -139,7 +139,7 @@ func (c *Compactions) now() int64 {
 	return time.Now().UnixMilli()
 }
 
-func preparation(input *prompt.Input) (run.Digest, error) {
+func preparation(input *prompt.Input) (turn.Digest, error) {
 	body, err := jsonstable.EncodeTypedPayload(1, "twilight/compaction/preparation", input)
 	if err != nil {
 		return "", err
@@ -240,12 +240,12 @@ func newCompactionID() (compaction.ID, error) {
 	return compaction.ID(hex.EncodeToString(bytes[:])), nil
 }
 
-func (c *Compactions) freeze(ctx context.Context, id compaction.ID, plan *chatlog.CompactionPlan, boundary run.Digest, request *SummaryRequest) (compaction.Request, error) {
+func (c *Compactions) freeze(ctx context.Context, id compaction.ID, plan *chatlog.CompactionPlan, boundary turn.Digest, request *SummaryRequest) (compaction.Request, error) {
 	if c.Frozen == nil {
 		return compaction.Request{}, errors.New("driver: compaction requires a frozen store")
 	}
 	if request.Model == "" {
-		request.Model = run.ModelRef(request.Request.Model)
+		request.Model = turn.ModelRef(request.Request.Model)
 	}
 	if request.Model == "" || string(request.Model) != request.Request.Model || len(request.Request.Tools) != 0 {
 		return compaction.Request{}, errors.New("driver: summary request must name its model and have no tools")
@@ -310,7 +310,7 @@ func (c *Compactions) start(ctx context.Context, w writer.Writer, request *compa
 		if len(batches) == 0 {
 			return nil, nil
 		}
-		if err := sessionkernel.RequireQuiescentRun(v); err != nil {
+		if err := sessionkernel.RequireQuiescentTurn(v); err != nil {
 			return nil, err
 		}
 		return &writer.SemanticGroup{CommitID: ledger.CommitID(identity), Batches: batches}, nil
@@ -319,7 +319,7 @@ func (c *Compactions) start(ctx context.Context, w writer.Writer, request *compa
 }
 
 // NeedsRecovery is the activation/idle-release predicate for hosts. Pending
-// operations and unacknowledged settlements remain work even without a Run.
+// operations and unacknowledged settlements remain work even without a Turn.
 func (c *Compactions) NeedsRecovery(ctx context.Context, w writer.Writer) (bool, error) {
 	state, err := compaction.Read(ctx, w.Projections(), w.SessionID())
 	if err != nil {
@@ -383,7 +383,7 @@ func (c *Compactions) Advance(ctx context.Context, w writer.Writer) (Maintenance
 		if err != nil {
 			return result, err
 		}
-		assignment := effect.Assignment{Session: run.Scope(w.SessionID()), RunID: result.Key.RunID,
+		assignment := effect.Assignment{Session: turn.Scope(w.SessionID()), OwnerKind: result.Key.OwnerKind, OwnerID: result.Key.OwnerID,
 			StepID: "summary", Effect: result.Key.Effect, Target: op.Request.Target,
 			Body: effect.ModelAssignment{Model: op.Request.Model, Request: &request, RequestDigest: op.Request.RequestDigest}}
 		unavailable, err := c.Executor.Validate(ctx, assignment)
@@ -521,7 +521,7 @@ func (c *Compactions) finish(ctx context.Context, w writer.Writer, op *compactio
 			return err
 		}
 		parts = append(parts, unit.PartFunc(func(_ context.Context, v writer.View, _ int64) ([]writer.TypedBatch, error) {
-			return nil, sessionkernel.RequireQuiescentRun(v)
+			return nil, sessionkernel.RequireQuiescentTurn(v)
 		}), chatlog.CompactContext(result.CompactionID, summary, op.Request.Plan))
 	}
 	parts = append(parts, compaction.Finish(result))

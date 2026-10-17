@@ -118,7 +118,7 @@ func contextPairs(entries []Entry) []EntryDigestPair {
 
 // CompactContext contributes a summary and compaction to an atomic unit. It
 // validates the plan on the unit's Writer View, not at summary-generation time.
-// Run quiescence is the caller's policy and belongs in a separate unit Part.
+// Turn quiescence is the caller's policy and belongs in a separate unit Part.
 func CompactContext(id CompactionID, summary Summary, plan CompactionPlan) unit.Part {
 	return &compactContext{id: id, summary: summary, plan: plan}
 }

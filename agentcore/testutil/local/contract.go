@@ -8,17 +8,17 @@ import (
 	"context"
 	"encoding/json"
 
-	run "github.com/felinics/twilight/agentcore/run"
-	effect "github.com/felinics/twilight/agentcore/run/effect"
+	turn "github.com/felinics/twilight/agentcore/turn"
+	effect "github.com/felinics/twilight/agentcore/turn/effect"
 
 	"github.com/felinics/twilight/sdk"
 )
 
-// ModelCatalog resolves a frozen run.ModelRef into an invoker at execution
+// ModelCatalog resolves a frozen turn.ModelRef into an invoker at execution
 // time; provider binding never enters the frozen request. The same ModelRef
-// must resolve to equivalent execution semantics for the life of a Run.
+// must resolve to equivalent execution semantics for the life of a Turn.
 type ModelCatalog interface {
-	ResolveModel(run.ModelRef) (ModelInvoker, error)
+	ResolveModel(turn.ModelRef) (ModelInvoker, error)
 }
 
 type ModelInvoker interface {
@@ -32,46 +32,46 @@ type StreamingModelInvoker interface {
 }
 
 type ToolCatalog interface {
-	ResolveTool(run.ToolRef) (ExecutableTool, error)
+	ResolveTool(turn.ToolRef) (ExecutableTool, error)
 }
 
 type ToolExecutionRequest struct {
-	RunID  run.RunID
-	StepID run.StepID
-	CallID run.CallID
+	TurnID turn.TurnID
+	StepID turn.StepID
+	CallID turn.CallID
 	// Effect is the tool effect the call was started under; it identifies the
 	// Outcome the Executor returns through its message-shaped port.
-	Effect           run.EffectID
-	ToolRef          run.ToolRef
-	DefinitionDigest run.Digest
-	Arguments        run.CanonicalJSON
+	Effect           turn.EffectID
+	ToolRef          turn.ToolRef
+	DefinitionDigest turn.Digest
+	Arguments        turn.CanonicalJSON
 	// Target is an opaque resource reference supplied by the application; the
 	// executor does not interpret it.
-	Target   *run.TargetRef
+	Target   *turn.TargetRef
 	Progress ToolProgressSink
 }
 
 // ExecutableTool is the tool-side execution contract of the colocated
 // executor.
 type ExecutableTool interface {
-	Ref() run.ToolRef
+	Ref() turn.ToolRef
 	Definition() sdk.ToolDefinition
-	ResponsePolicy() run.ResponsePolicy
+	ResponsePolicy() turn.ResponsePolicy
 	// ValidateArguments runs before the start barrier and must not produce
 	// external effects.
-	ValidateArguments(run.CanonicalJSON) error
+	ValidateArguments(turn.CanonicalJSON) error
 	Execute(context.Context, ToolExecutionRequest) ToolExecutionOutcome
 	// Replay declares whether Execute may run again for the same call after
 	// an earlier execution was lost. Every tool answers; the zero value
 	// ReplayUnknown is the answer of a tool whose author has not judged it.
 	// The declaration is frozen into the ToolSpec and carried on every call
 	// and Assignment.
-	Replay() run.ReplayPolicy
+	Replay() turn.ReplayPolicy
 	// Placement declares where the tool runs: in the executor process, or
 	// inside the Session's workspace, in which case its calls need a target
 	// and are routed to the workspace backend. Every tool answers; the
 	// declaration is frozen into the ToolSpec.
-	Placement() run.ToolPlacement
+	Placement() turn.ToolPlacement
 }
 
 // Tool outcomes belong to the process-independent effect protocol. Aliases

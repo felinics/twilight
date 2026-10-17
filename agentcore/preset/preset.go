@@ -5,14 +5,15 @@ import (
 	"fmt"
 
 	"github.com/felinics/twilight/agentcore/jsonstable"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/model"
+	"github.com/felinics/twilight/agentcore/preset/ref"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/model"
 )
 
 type (
 	// PresetID names a preset under registration; the PresetRef a Session
 	// records pairs it with the digest of the registered AgentPreset.
-	PresetID string
+	PresetID = ref.ID
 	// PromptBuilderRef identifies the prompt builder that builds the model
 	// prompt for a Turn. It is part of the preset digest.
 	PromptBuilderRef string
@@ -20,10 +21,7 @@ type (
 
 // PresetRef is the digest-checked reference a Turn's started fact records:
 // the decision identity the Turn runs under, addressable across processes.
-type PresetRef struct {
-	ID     PresetID          `json:"id"`
-	Digest jsonstable.Digest `json:"digest"`
-}
+type PresetRef = ref.Ref
 
 // ToolContract is one tool of an AgentPreset, frozen as a unit: the
 // definition the model sees, the response policy the agent waits under,
@@ -31,15 +29,15 @@ type PresetRef struct {
 // attribute answers a different layer; the contract freezes them together
 // because a Turn must resume under all four unchanged.
 type ToolContract struct {
-	Ref        run.ToolRef          `json:"ref"`
+	Ref        turn.ToolRef         `json:"ref"`
 	Definition model.ToolDefinition `json:"definition"`
-	Policy     run.ResponsePolicy   `json:"policy"`
+	Policy     turn.ResponsePolicy  `json:"policy"`
 	// Replay is the tool's declared replay policy; it enters the preset
 	// digest and the frozen ToolSpec. Omitted when unknown.
-	Replay run.ReplayPolicy `json:"replay,omitempty"`
+	Replay turn.ReplayPolicy `json:"replay,omitempty"`
 	// Placement is the tool's declared placement; it enters the preset
 	// digest and the frozen ToolSpec. Omitted for process placement.
-	Placement run.ToolPlacement `json:"placement,omitempty"`
+	Placement turn.ToolPlacement `json:"placement,omitempty"`
 }
 
 // AgentPreset is the decision identity a Turn is started under: every
@@ -48,7 +46,7 @@ type ToolContract struct {
 // clients and tool implementations never enter it. Streaming is not part of
 // the identity: it is an execution-side observation choice of the backend.
 type AgentPreset struct {
-	Model run.ModelRef   `json:"model"`
+	Model turn.ModelRef  `json:"model"`
 	Tools []ToolContract `json:"tools,omitempty"`
 	// PromptBuilder is the ref of the prompt builder resolved on the Owner
 	// side.
@@ -56,9 +54,9 @@ type AgentPreset struct {
 	// Scheduling is how the tool calls of one step run: parallel (default) or
 	// sequential, with an optional bound on concurrent workers. It is frozen
 	// onto each ToolStep.
-	Scheduling run.ToolScheduling `json:"scheduling,omitempty"`
+	Scheduling turn.ToolScheduling `json:"scheduling,omitempty"`
 	// MalformedRetries is how many times one model step is retried after a
-	// malformed result before the Run fails; zero fails on the first.
+	// malformed result before the Turn fails; zero fails on the first.
 	MalformedRetries uint8 `json:"malformedRetries,omitempty"`
 	// SystemPrompt is the conversation instruction frozen by the preset digest.
 	SystemPrompt string `json:"systemPrompt,omitempty"`
@@ -73,12 +71,12 @@ const DigestDomain = "twilight/turn/preset"
 // SystemPrompt.
 func DigestPreset(p *AgentPreset) (jsonstable.Digest, error) {
 	body := struct {
-		Model            run.ModelRef       `json:"model"`
-		Tools            []ToolContract     `json:"tools,omitempty"`
-		PromptBuilder    PromptBuilderRef   `json:"promptBuilder"`
-		Scheduling       run.ToolScheduling `json:"scheduling,omitempty"`
-		MalformedRetries uint8              `json:"malformedRetries,omitempty"`
-		SystemPrompt     string             `json:"systemPrompt,omitempty"`
+		Model            turn.ModelRef       `json:"model"`
+		Tools            []ToolContract      `json:"tools,omitempty"`
+		PromptBuilder    PromptBuilderRef    `json:"promptBuilder"`
+		Scheduling       turn.ToolScheduling `json:"scheduling,omitempty"`
+		MalformedRetries uint8               `json:"malformedRetries,omitempty"`
+		SystemPrompt     string              `json:"systemPrompt,omitempty"`
 	}{p.Model, p.Tools, p.PromptBuilder, p.Scheduling, p.MalformedRetries, p.SystemPrompt}
 	raw, err := jsonstable.EncodeTypedPayload(1, DigestDomain, body)
 	if err != nil {
@@ -96,7 +94,7 @@ func ValidatePreset(p *AgentPreset) error {
 	case p.PromptBuilder == "":
 		return errors.New("preset: preset requires a prompt builder ref")
 	}
-	if m := p.Scheduling.Mode; m != "" && m != run.ToolScheduleParallel && m != run.ToolScheduleSequential {
+	if m := p.Scheduling.Mode; m != "" && m != turn.ToolScheduleParallel && m != turn.ToolScheduleSequential {
 		return fmt.Errorf("preset: preset scheduling mode %q is unknown", m)
 	}
 	if p.Scheduling.MaxParallel < 0 {

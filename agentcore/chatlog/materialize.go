@@ -5,27 +5,27 @@ import (
 	"fmt"
 
 	"github.com/felinics/twilight/agentcore/jsonstable"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/model"
-	"github.com/felinics/twilight/agentcore/run/schema"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/model"
+	"github.com/felinics/twilight/agentcore/turn/schema"
 )
 
 // ContentResolver resolves the frozen bodies structural entries name by
-// digest. run/sessionstore.Content is the first-party
+// digest. turn/sessionstore.Content is the first-party
 // implementation; the projections never call it.
 type ContentResolver interface {
 	ModelResult(context.Context, jsonstable.Digest) (model.ModelResult, error)
-	ToolOutput(context.Context, jsonstable.Digest) (run.CanonicalJSON, error)
-	ToolResponse(context.Context, jsonstable.Digest) (run.CanonicalJSON, error)
+	ToolOutput(context.Context, jsonstable.Digest) (turn.CanonicalJSON, error)
+	ToolResponse(context.Context, jsonstable.Digest) (turn.CanonicalJSON, error)
 }
 
-// Call is one tool call of a materialized assistant: the Run's CallID paired
+// Call is one tool call of a materialized assistant: the Turn's CallID paired
 // with the provider's identifiers and arguments from the frozen result.
 type Call struct {
 	CallID         CallID
 	ProviderCallID string
 	Name           string
-	Input          run.CanonicalJSON
+	Input          turn.CanonicalJSON
 }
 
 // Materialized is one entry with its frozen body resolved: Result and Calls
@@ -35,7 +35,7 @@ type Materialized struct {
 	Entry  *Entry
 	Result *model.ModelResult
 	Calls  []Call
-	Output *run.CanonicalJSON
+	Output *turn.CanonicalJSON
 }
 
 // Text is the rendering of the entry's main content: the assistant text, the
@@ -63,11 +63,11 @@ func (m *Materialized) Text() string {
 type Materializer struct {
 	content ContentResolver
 	results map[jsonstable.Digest]*model.ModelResult
-	outputs map[jsonstable.Digest]*run.CanonicalJSON
+	outputs map[jsonstable.Digest]*turn.CanonicalJSON
 }
 
 func NewMaterializer(content ContentResolver) *Materializer {
-	return &Materializer{content: content, results: map[jsonstable.Digest]*model.ModelResult{}, outputs: map[jsonstable.Digest]*run.CanonicalJSON{}}
+	return &Materializer{content: content, results: map[jsonstable.Digest]*model.ModelResult{}, outputs: map[jsonstable.Digest]*turn.CanonicalJSON{}}
 }
 
 // Entries materializes every entry in order.
@@ -132,7 +132,7 @@ func (m *Materializer) result(ctx context.Context, digest jsonstable.Digest) (*m
 	return &r, nil
 }
 
-func (m *Materializer) output(ctx context.Context, r *ToolResult) (*run.CanonicalJSON, error) {
+func (m *Materializer) output(ctx context.Context, r *ToolResult) (*turn.CanonicalJSON, error) {
 	if o, ok := m.outputs[r.OutputDigest]; ok {
 		return o, nil
 	}
@@ -140,7 +140,7 @@ func (m *Materializer) output(ctx context.Context, r *ToolResult) (*run.Canonica
 		return nil, fmt.Errorf("chatlog: no content resolver for tool result %s", r.ID)
 	}
 	var (
-		o   run.CanonicalJSON
+		o   turn.CanonicalJSON
 		err error
 	)
 	switch r.Source {
@@ -158,7 +158,7 @@ func (m *Materializer) output(ctx context.Context, r *ToolResult) (*run.Canonica
 	return &o, nil
 }
 
-// pairCalls zips the Run-assigned CallIDs with the result's ToolCalls. A
+// pairCalls zips the Turn-assigned CallIDs with the result's ToolCalls. A
 // result issued without a ToolStepOpened in the entry (no CallIDs) derives
 // them the way the protocol does (identity table).
 func pairCalls(a *Assistant, result *model.ModelResult) ([]Call, error) {

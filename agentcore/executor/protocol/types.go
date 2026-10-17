@@ -1,32 +1,32 @@
 // Package protocol defines the wire/application protocol for the process-
-// independent effect port in agent/run/effect. It owns message encoding, but
-// never mutates a Session or Run; settlement remains the Owner's Loop concern.
+// independent effect port in agentcore/turn/effect. It owns message encoding, but
+// never mutates a Session or Turn; settlement remains the Owner's Loop concern.
 package protocol
 
 import (
 	"fmt"
 
 	"github.com/felinics/twilight/agentcore/jsonstable"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/effect"
-	"github.com/felinics/twilight/agentcore/run/model"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/effect"
+	"github.com/felinics/twilight/agentcore/turn/model"
 )
 
-const ProtocolVersion uint16 = 1
+const ProtocolVersion uint16 = 2
 
 // AssignmentEnvelope is the serializable dispatch message.
 type AssignmentEnvelope struct {
 	ProtocolVersion uint16            `json:"protocolVersion"`
-	Session         run.Scope         `json:"session"`
+	Session         turn.Scope        `json:"session"`
 	Assignment      effect.Assignment `json:"assignment"`
 }
 
 // ToolOutcomeEnvelope is the wire representation of loop's sealed outcome.
 type ToolOutcomeEnvelope struct {
-	Kind    string                   `json:"kind"`
-	Result  *run.ToolExecutionResult `json:"result,omitempty"`
-	Failure *run.ToolFailure         `json:"failure,omitempty"`
-	Retry   run.RetryDisposition     `json:"retry,omitempty"`
+	Kind    string                    `json:"kind"`
+	Result  *turn.ToolExecutionResult `json:"result,omitempty"`
+	Failure *turn.ToolFailure         `json:"failure,omitempty"`
+	Retry   turn.RetryDisposition     `json:"retry,omitempty"`
 }
 
 type WireError struct {
@@ -46,7 +46,7 @@ type OutcomeEnvelope struct {
 	Unknown         bool                 `json:"unknown,omitempty"`
 }
 
-func (o *OutcomeEnvelope) Digest() (run.Digest, error) {
+func (o *OutcomeEnvelope) Digest() (turn.Digest, error) {
 	return jsonstable.DigestCanonical(o)
 }
 
@@ -108,19 +108,19 @@ func DecodeOutcome(w *OutcomeEnvelope) effect.Outcome {
 	case w.Tool != nil:
 		switch w.Tool.Kind {
 		case "succeeded":
-			var r run.ToolExecutionResult
+			var r turn.ToolExecutionResult
 			if w.Tool.Result != nil {
 				r = *w.Tool.Result
 			}
 			out.Result = effect.ToolExecutionSucceeded{Result: r}
 		case "failed":
-			var f run.ToolFailure
+			var f turn.ToolFailure
 			if w.Tool.Failure != nil {
 				f = *w.Tool.Failure
 			}
 			out.Result = effect.ToolExecutionFailed{Failure: f, Retry: w.Tool.Retry}
 		case "unknown":
-			var f run.ToolFailure
+			var f turn.ToolFailure
 			if w.Tool.Failure != nil {
 				f = *w.Tool.Failure
 			}

@@ -11,8 +11,8 @@ import (
 
 	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/module"
-	"github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/session"
+	"github.com/felinics/twilight/agentcore/turn"
 )
 
 // Event is one item of a Session's observation stream, in either of two
@@ -40,8 +40,8 @@ type Event struct {
 // Progress is the transient part of an Event: what the executor reported of
 // an effect while it ran.
 type Progress struct {
-	RunID      run.RunID
-	Effect     run.EffectID
+	TurnID     turn.TurnID
+	Effect     turn.EffectID
 	Generation int
 	Sequence   uint64
 	Kind       string

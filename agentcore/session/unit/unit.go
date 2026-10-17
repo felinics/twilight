@@ -2,8 +2,8 @@
 // assembled. A Work names a CommitID and the Parts that write under
 // it; every Part prepares its own module's events against the same
 // transactional View, and the Writer appends them as one commit or nothing.
-// No module builds another module's events: the Turn does not encode Run
-// facts, the Run does not carry chatlog events. A Part that has to refuse
+// No module builds another module's events: a Turn command does not encode
+// chatlog events. A Part that has to refuse
 // (a precondition of its module fails) refuses the whole unit.
 package unit
 
@@ -38,6 +38,9 @@ type Work struct {
 	// operation replayed.
 	CommitID ledger.CommitID
 	Parts    []Part
+	// ReplayCheck validates request content before reusing a stored commit.
+	// It runs under the Writer critical section without preparing any Part.
+	ReplayCheck func(ledger.Commit) error
 }
 
 // Commit appends the unit through w. A CommitID the log already holds is
@@ -58,6 +61,11 @@ func Commit(ctx context.Context, w writer.Writer, now int64, work Work) (writer.
 		if existing, found, err := view.LookupCommit(work.CommitID); err != nil {
 			return nil, err
 		} else if found {
+			if work.ReplayCheck != nil {
+				if err := work.ReplayCheck(existing); err != nil {
+					return nil, err
+				}
+			}
 			replay = &existing
 			return nil, nil
 		}

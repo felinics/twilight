@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/felinics/twilight/agentcore/executor/notice"
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 // backendNotices is the Worker's subscriber to its Backends' settled Refs

@@ -4,7 +4,7 @@
 // (agentcore/ledger), so what is true of any commit ledger is true here:
 // the ledger is the only fact authority, ExecutionState is its fold, a
 // replayed command is recognised by its CommitID, and a fenced writer's
-// commit is refused by its Epoch. The Run never reads this ledger; the two
+// commit is refused by its Epoch. The Turn never reads this ledger; the two
 // authorities meet only at AssignmentKey.
 package store
 
@@ -17,7 +17,7 @@ import (
 	"github.com/felinics/twilight/agentcore/executor/protocol"
 	"github.com/felinics/twilight/agentcore/jsonstable"
 	"github.com/felinics/twilight/agentcore/ledger"
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 var (
@@ -83,7 +83,7 @@ func (l Lease) IsZero() bool { return l.Owner == "" && l.Epoch == 0 }
 // ExecutionRef is the physical binding of the current attempt made for one
 // effect: the provider (backend) the execution was handed to and
 // that provider's opaque handle. It never leaves the execution domain:
-// executions are addressed by AssignmentKey, and the Run records the
+// executions are addressed by AssignmentKey, and the Turn records the
 // EffectID alone.
 type ExecutionRef struct {
 	Provider string `json:"provider"`

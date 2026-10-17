@@ -7,18 +7,18 @@ import (
 	"github.com/felinics/twilight/agentcore/driver"
 	"github.com/felinics/twilight/agentcore/preset"
 	"github.com/felinics/twilight/agentcore/prompt"
-	"github.com/felinics/twilight/agentcore/run/effect"
-	"github.com/felinics/twilight/agentcore/run/frozen"
-	"github.com/felinics/twilight/agentcore/run/loop"
-	"github.com/felinics/twilight/agentcore/run/reconcile"
-	"github.com/felinics/twilight/agentcore/run/redispatch"
-	"github.com/felinics/twilight/agentcore/run/sessionstore"
 	"github.com/felinics/twilight/agentcore/session"
+	"github.com/felinics/twilight/agentcore/turn/effect"
+	"github.com/felinics/twilight/agentcore/turn/frozen"
+	"github.com/felinics/twilight/agentcore/turn/loop"
+	"github.com/felinics/twilight/agentcore/turn/reconcile"
+	"github.com/felinics/twilight/agentcore/turn/redispatch"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
 )
 
 // ExecutionSources are durable semantic reads, independent of ownership.
 type ExecutionSources struct {
-	Runs        *sessionstore.SessionRunStore
+	TurnStore   *sessionstore.SessionTurnStore
 	Projections session.ProjectionReader
 	Content     chatlog.ContentResolver
 	Frozen      frozen.Store
@@ -54,8 +54,8 @@ func NewExecution(cfg ExecutionConfig, src ExecutionSources) (*Execution, error)
 	if cfg.Executor == nil || cfg.PromptBuilders == nil {
 		return nil, errors.New("runtime: executor and prompt builder catalog are required")
 	}
-	if src.Runs == nil || src.Projections == nil || src.Content == nil {
-		return nil, errors.New("runtime: runs, projections and content are required")
+	if src.TurnStore == nil || src.Projections == nil || src.Content == nil {
+		return nil, errors.New("runtime: turn store, projections and content are required")
 	}
 	if cfg.MaxRedispatches < 0 || cfg.MaxCompactionAttempts < 0 {
 		return nil, errors.New("runtime: negative recovery attempt limit")
@@ -76,12 +76,12 @@ func NewExecution(cfg ExecutionConfig, src ExecutionSources) (*Execution, error)
 	if presets == nil {
 		presets = preset.NewMemory()
 	}
-	maintenance := &driver.Compactions{Executor: cfg.Executor, Requests: src.Runs,
+	maintenance := &driver.Compactions{Executor: cfg.Executor, Requests: src.TurnStore,
 		Frozen: src.Frozen, Content: src.Content, Policy: cfg.ContextPolicy, MaxAttempts: cfg.MaxCompactionAttempts}
 	loops := &driver.Loops{Executor: cfg.Executor, Presets: presets, PromptBuilders: cfg.PromptBuilders,
 		Targets: cfg.TargetResolver, Sources: prompt.Sources{Projections: src.Projections, Content: src.Content},
 		Planner: cfg.Planner, Candidates: maintenance}
 	return &Execution{Executor: cfg.Executor, Presets: presets, Compactions: maintenance,
-		Driver: &driver.Driver{Runs: src.Runs, Loops: loops, Compactions: maintenance, MissingEffects: cfg.MissingEffects,
+		Driver: &driver.Driver{TurnStore: src.TurnStore, Loops: loops, Compactions: maintenance, MissingEffects: cfg.MissingEffects,
 			Redispatches: cfg.Redispatches, MaxRedispatches: cfg.MaxRedispatches, Sink: cfg.Sink}}, nil
 }

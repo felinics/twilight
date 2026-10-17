@@ -19,9 +19,9 @@ import (
 	"github.com/felinics/twilight/agentcore/executor/protocol"
 	executionstore "github.com/felinics/twilight/agentcore/executor/store"
 	"github.com/felinics/twilight/agentcore/ledger"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/effect"
-	"github.com/felinics/twilight/agentcore/run/schema"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/effect"
+	"github.com/felinics/twilight/agentcore/turn/schema"
 )
 
 // WorkerOptions configure one Worker incarnation.
@@ -69,7 +69,7 @@ const defaultLeaseDuration = 30 * time.Second
 // live lease and continues it from the persisted payload and Ref, and
 // Dispose settles a record its caller has given up on. Which records to
 // recover, when to ask and when to give up are decisions of whoever observes
-// the record as orphaned — the Owner reconciling its own Run or
+// the record as orphaned — the Owner reconciling its own Turn or
 // an external controller — and the Worker runs no loop of its own
 // Neither operation is part of effect.ExecutionPort, which
 // stays the per-assignment data plane.
@@ -212,7 +212,7 @@ func (w *Worker) backend(ref ExecutionRef) (ExecutionBackend, error) {
 	return b, nil
 }
 
-func (w *Worker) Validate(ctx context.Context, a effect.Assignment) (*run.ToolFailure, error) {
+func (w *Worker) Validate(ctx context.Context, a effect.Assignment) (*turn.ToolFailure, error) {
 	r, err := w.route(a)
 	if err != nil {
 		return nil, err
@@ -294,6 +294,9 @@ func (w *Worker) holdsLease(s *executionstore.Execution) bool {
 // same Assignment is answered from the ledger; recovery of an existing
 // execution goes through RecoverExecution.
 func (w *Worker) Dispatch(ctx context.Context, a effect.Assignment) error {
+	if err := a.Key().Validate(); err != nil {
+		return err
+	}
 	if a.Body == nil {
 		return errors.New("executor: assignment without body")
 	}
@@ -382,7 +385,7 @@ func (w *Worker) Dispatch(ctx context.Context, a effect.Assignment) error {
 // RecoverExecution once the Owner observes it orphaned. The ledger holds one
 // acceptance per key and does not compare content, so telling the two
 // Assignments apart is the Worker's reading.
-func (w *Worker) opened(ctx context.Context, state *executionstore.Execution, digest run.Digest) error {
+func (w *Worker) opened(ctx context.Context, state *executionstore.Execution, digest turn.Digest) error {
 	if state.Aborted() {
 		return effect.ErrExecutionAborted
 	}
@@ -478,7 +481,7 @@ func (w *Worker) Acknowledge(ctx context.Context, key effect.AssignmentKey) erro
 
 // Dispose settles an unsettled execution as Unknown without re-dispatching
 // it. The caller has given the execution up: it will not be recovered, and
-// the Owner disposes the Run target on its next read. Unlike
+// the Owner disposes the Turn target on its next read. Unlike
 // RecoverExecution, Dispose is unconditional — it also applies to executions
 // whose lease holder is dead or absent — and unlike Cancel it does not
 // require backend reachability: the backend is cancelled best-effort after

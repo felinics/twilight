@@ -1,5 +1,5 @@
 // Package sdkconv provides test-side conversions between the SDK's model types and the persisted
-// values of agentcore/run/model. Freeze* turns a caller-owned SDK value into
+// values of agentcore/turn/model. Freeze* turns a caller-owned SDK value into
 // a detached run value; the function named after a value type converts that
 // value back into a detached SDK value.
 //

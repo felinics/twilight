@@ -5,19 +5,19 @@ import (
 	"fmt"
 
 	"github.com/felinics/twilight/agentcore/executor"
-	"github.com/felinics/twilight/agentcore/run"
+	"github.com/felinics/twilight/agentcore/turn"
 )
 
 // Catalog is a static effect catalog for a colocated deployment: the model
 // invokers and tool implementations one process serves.
 type Catalog struct {
-	models map[run.ModelRef]ModelInvoker
-	tools  map[run.ToolRef]ExecutableTool
+	models map[turn.ModelRef]ModelInvoker
+	tools  map[turn.ToolRef]ExecutableTool
 }
 
 // NewCatalog builds a Catalog; models maps each ModelRef to its invoker.
-func NewCatalog(models map[run.ModelRef]ModelInvoker, tools ...ExecutableTool) (*Catalog, error) {
-	c := &Catalog{models: make(map[run.ModelRef]ModelInvoker, len(models)), tools: make(map[run.ToolRef]ExecutableTool, len(tools))}
+func NewCatalog(models map[turn.ModelRef]ModelInvoker, tools ...ExecutableTool) (*Catalog, error) {
+	c := &Catalog{models: make(map[turn.ModelRef]ModelInvoker, len(models)), tools: make(map[turn.ToolRef]ExecutableTool, len(tools))}
 	for ref, inv := range models {
 		if ref == "" || inv == nil {
 			return nil, errors.New("local: catalog requires a model ref and an invoker")
@@ -36,7 +36,7 @@ func NewCatalog(models map[run.ModelRef]ModelInvoker, tools ...ExecutableTool) (
 	return c, nil
 }
 
-func (c *Catalog) ResolveModel(ref run.ModelRef) (ModelInvoker, error) {
+func (c *Catalog) ResolveModel(ref turn.ModelRef) (ModelInvoker, error) {
 	inv, ok := c.models[ref]
 	if !ok {
 		return nil, fmt.Errorf("local: unknown model %q", ref)
@@ -44,7 +44,7 @@ func (c *Catalog) ResolveModel(ref run.ModelRef) (ModelInvoker, error) {
 	return inv, nil
 }
 
-func (c *Catalog) ResolveTool(ref run.ToolRef) (ExecutableTool, error) {
+func (c *Catalog) ResolveTool(ref turn.ToolRef) (ExecutableTool, error) {
 	t, ok := c.tools[ref]
 	if !ok {
 		return nil, fmt.Errorf("local: unknown tool %q", ref)

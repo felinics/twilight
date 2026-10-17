@@ -3,21 +3,20 @@ package sessionkernel
 import (
 	"fmt"
 
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/sessionstore"
 	"github.com/felinics/twilight/agentcore/session/writer"
 	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
 )
 
 // surfaceOf loads the turn surface from a commit View.
-func surfaceOf(v writer.View) (turn.TurnSurface, error) {
-	state, err := v.Projection(turn.SurfaceProjectionID, turn.SurfaceProjection.Version)
+func surfaceOf(v writer.View) (sessionstore.TurnSurface, error) {
+	state, err := v.Projection(sessionstore.SurfaceProjectionID, sessionstore.SurfaceProjection.Version)
 	if err != nil {
-		return turn.TurnSurface{}, err
+		return sessionstore.TurnSurface{}, err
 	}
-	surface, ok := state.(turn.TurnSurface)
+	surface, ok := state.(sessionstore.TurnSurface)
 	if !ok {
-		return turn.TurnSurface{}, fmt.Errorf("sessionkernel: surface projection is %T", state)
+		return sessionstore.TurnSurface{}, fmt.Errorf("sessionkernel: surface projection is %T", state)
 	}
 	return surface, nil
 }
@@ -36,13 +35,13 @@ func RequireNoActiveTurn(v writer.View) error {
 	return nil
 }
 
-// RequireQuiescentRun is the guard that also admits a point between the
-// steps of a Turn: no active Turn, or the active Turn's Run is Open, or it
+// RequireQuiescentTurn is the guard that also admits a point between the
+// steps of a Turn: no active Turn, or the active Turn's Turn is Open, or it
 // is in a ToolStep with no Executing call. A model step Prepared or
 // Executing, or a tool call Executing, is turn.ErrConflict: the context such
 // a step reads or settles into must not move under it. Pending and Waiting
 // calls are fine; the closure rule keeps their assistant.
-func RequireQuiescentRun(v writer.View) error {
+func RequireQuiescentTurn(v writer.View) error {
 	surface, err := surfaceOf(v)
 	if err != nil {
 		return err
@@ -59,15 +58,15 @@ func RequireQuiescentRun(v writer.View) error {
 	if !ok {
 		return fmt.Errorf("sessionkernel: machine projection is %T", mstate)
 	}
-	state, ok := machine.Active[active.RunID]
+	state, ok := machine.Active[active.TurnID]
 	if !ok {
-		return nil // no live Run: nothing is mid-step
+		return nil // no live Turn: nothing is mid-step
 	}
 	switch state.Current.(type) {
-	case run.Open:
+	case turn.Open:
 		return nil
-	case run.ToolStep:
-		if calls := run.ExecutingCalls(state); len(calls) > 0 {
+	case turn.ToolStep:
+		if calls := turn.ExecutingCalls(state); len(calls) > 0 {
 			return fmt.Errorf("%w: turn %s has %d executing tool call(s)", turn.ErrConflict, active.TurnID, len(calls))
 		}
 		return nil

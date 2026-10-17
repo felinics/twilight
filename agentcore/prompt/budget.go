@@ -5,7 +5,7 @@ import "fmt"
 // TokenBudget compares an estimated input token count against model capacity,
 // reserving room for both output and a safety margin. The estimator and model
 // capacity are supplied by the caller; this package does not tokenize requests.
-// An opaque run.PromptToken is a freshness token, not a token count.
+// An opaque turn.PromptToken is a freshness token, not a token count.
 type TokenBudget struct {
 	ContextWindow int
 	OutputReserve int

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	effect "github.com/felinics/twilight/agentcore/run/effect"
+	effect "github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 // progressSink is the ToolProgressSink of one tool execution: each payload

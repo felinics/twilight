@@ -4,7 +4,7 @@ import (
 	"context"
 
 	executionstore "github.com/felinics/twilight/agentcore/executor/store"
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 var _ effect.OutstandingPort = (*Worker)(nil)

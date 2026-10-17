@@ -7,16 +7,16 @@ package driver
 import (
 	"context"
 	"fmt"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
 	"sync"
 
 	"github.com/felinics/twilight/agentcore/preset"
 	"github.com/felinics/twilight/agentcore/prompt"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/effect"
-	"github.com/felinics/twilight/agentcore/run/loop"
-	"github.com/felinics/twilight/agentcore/run/store"
 	"github.com/felinics/twilight/agentcore/session/writer"
 	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/effect"
+	"github.com/felinics/twilight/agentcore/turn/loop"
+	"github.com/felinics/twilight/agentcore/turn/store"
 )
 
 // Presets resolves a PresetRef to its immutable AgentPreset.
@@ -24,7 +24,7 @@ type Presets interface {
 	Resolve(preset.PresetRef) (preset.AgentPreset, error)
 }
 
-// Planner is the application's between-steps hook: it runs while a Run is
+// Planner is the application's between-steps hook: it runs while a Turn is
 // Open and about to plan a model request, with the Writer of the Session
 // being driven, so what it commits (an in-turn checkpoint) is what the
 // PromptBuilder reads next. Errors stop the drive.
@@ -32,14 +32,14 @@ type Planner interface {
 	BeforePrepare(ctx context.Context, w writer.Writer, input prompt.Input) error
 }
 
-// CandidateChecker checks a complete candidate before it becomes a Run fact.
-// Maintenance returns control to the Session driver; it is not a Run step.
+// CandidateChecker checks a complete candidate before it becomes a Turn fact.
+// Maintenance returns control to the Session driver; it is not a Turn step.
 type CandidateChecker interface {
 	CheckCandidate(context.Context, writer.Writer, prompt.Input, *prompt.Prompt) (loop.CandidateDecision, error)
 }
 
 // Loops builds the Loop of each AgentPreset once and hands the same Loop to
-// every drive, redispatch and reattachment of a Run under that preset, so
+// every drive, redispatch and reattachment of a Turn under that preset, so
 // all of them meet the same already-driving guard. The Loop settings are
 // fixed when the first Loop is built; a field changed later reaches only
 // presets not built yet.
@@ -103,52 +103,37 @@ func (l *Loops) For(ref preset.PresetRef) (*loop.Loop, error) {
 	return lp, nil
 }
 
-// ForRun returns the Loop of the Turn that owns the Run, read from the
-// Session's turn surface through w, and that Turn's ID.
-func (l *Loops) ForRun(ctx context.Context, w writer.Writer, runID run.RunID) (*loop.Loop, turn.TurnID, error) {
-	turnID, err := ownerOf(ctx, w, runID)
+// ForTurn returns the Loop selected by the Turn's immutable preset.
+func (l *Loops) ForTurn(ctx context.Context, w writer.Writer, turnID turn.TurnID) (*loop.Loop, error) {
+	surface, err := sessionstore.ReadSurface(ctx, w.Projections(), w.SessionID())
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	surface, err := turn.ReadSurface(ctx, w.Projections(), w.SessionID())
-	if err != nil {
-		return nil, "", err
-	}
-	lp, err := l.For(surface.Turns[turnID].Preset)
-	if err != nil {
-		return nil, "", err
-	}
-	return lp, turnID, nil
-}
-
-// ownerOf is the Turn that owns the Run, read from the Session's turn
-// surface through w.
-func ownerOf(ctx context.Context, w writer.Writer, runID run.RunID) (turn.TurnID, error) {
-	surface, err := turn.ReadSurface(ctx, w.Projections(), w.SessionID())
-	if err != nil {
-		return "", err
-	}
-	turnID, ok := surface.OwnerOf(runID)
+	view, ok := surface.Turns[turnID]
 	if !ok {
-		return "", fmt.Errorf("driver: run %s: no owning turn", runID)
+		return nil, fmt.Errorf("driver: unknown turn %s", turnID)
 	}
-	return turnID, nil
+	lp, err := l.For(view.Preset)
+	if err != nil {
+		return nil, err
+	}
+	return lp, nil
 }
 
-func (l *Loops) checkCandidate(ctx context.Context, st store.RunStore, input prompt.Input, candidate *prompt.Prompt) (loop.CandidateDecision, error) {
+func (l *Loops) checkCandidate(ctx context.Context, st store.TurnStore, input prompt.Input, candidate *prompt.Prompt) (loop.CandidateDecision, error) {
 	owned, ok := st.(interface{ Writer() writer.Writer })
 	if !ok {
-		return loop.CandidateReady, fmt.Errorf("driver: run store %T exposes no writer for candidate checks", st)
+		return loop.CandidateReady, fmt.Errorf("driver: turn store %T exposes no writer for candidate checks", st)
 	}
 	return l.Candidates.CheckCandidate(ctx, owned.Writer(), input, candidate)
 }
 
 // beforePrepare hands the Loop's hook to the Planner with the Writer the
 // bound store commits through.
-func (l *Loops) beforePrepare(ctx context.Context, st store.RunStore, input prompt.Input) error {
+func (l *Loops) beforePrepare(ctx context.Context, st store.TurnStore, input prompt.Input) error {
 	owned, ok := st.(interface{ Writer() writer.Writer })
 	if !ok {
-		return fmt.Errorf("driver: run store %T exposes no writer for the planner", st)
+		return fmt.Errorf("driver: turn store %T exposes no writer for the planner", st)
 	}
 	return l.Planner.BeforePrepare(ctx, owned.Writer(), input)
 }

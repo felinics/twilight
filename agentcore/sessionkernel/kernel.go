@@ -1,6 +1,6 @@
 // Package sessionkernel is the Session-side semantic mechanism: the durable
 // fact layer one Session's meaning lives in -- the Store and its Writers,
-// the module Registry and the projections folded from it, the Run module's
+// the module Registry and the projections folded from it, the Turn module's
 // Session adapter, the Turn protocol's committer, the chatlog's commands,
 // the content store behind the frozen bodies and the fork/collect lifecycle
 // over the Store. These components read durable semantic state, write it
@@ -21,11 +21,11 @@ import (
 	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/module"
 	"github.com/felinics/twilight/agentcore/observe"
-	"github.com/felinics/twilight/agentcore/run/frozen"
-	"github.com/felinics/twilight/agentcore/run/sessionstore"
 	"github.com/felinics/twilight/agentcore/session"
 	"github.com/felinics/twilight/agentcore/session/writer"
 	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/frozen"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
 )
 
 // Artifacts groups the artifact ports: the binding index the
@@ -45,7 +45,7 @@ type Ports struct {
 	// Store is the Session kernel (required).
 	Store session.Stores
 	// Content is the cas ContentStore the frozen bodies live in under
-	// sessionstore.FrozenAuthority. The run store writes them;
+	// sessionstore.FrozenAuthority. The Turn store writes them;
 	// the materializer reads them for prompts, replies and transcripts.
 	// Required.
 	Content artifact.ContentStore
@@ -80,9 +80,9 @@ type Kernel struct {
 	Writers   *writer.Factory
 	Registry  *module.Registry
 	Admission writer.Admission
-	// Runs is the Run module's Session adapter: the Run core's store bound
-	// per Writer, Run reads by SessionID and the Run Parts of Turn units.
-	Runs *sessionstore.SessionRunStore
+	// TurnStore is the Turn module's Session adapter: the Turn core's store bound
+	// per Writer, with reads by SessionID and command Parts for atomic units.
+	TurnStore *sessionstore.SessionTurnStore
 	// Turns commits the Turn protocol and reads Turn status.
 	Turns *Coordinator
 	// Bus is the process-local committed fan-out. Tailer is the durable
@@ -151,7 +151,7 @@ func New(p Ports) (*Kernel, error) { //nolint:gocritic // hugeParam: Ports is a 
 	admission := writer.Admission{Bindings: bindings, Ledger: retention}
 	writers := &writer.Factory{Store: store, Registry: registry, Admission: admission,
 		Config: writer.WritersConfig{Cache: cache, CachePolicy: sessionstore.WriterCachePolicy(p.CacheEvery), Observers: observers}}
-	runs, err := sessionstore.NewSessionRunStore(sessionstore.Config{Registry: registry, Store: store, Frozen: fz, Cache: cache, Now: now, PrepareGuard: compaction.RequireIdle})
+	turns, err := sessionstore.NewSessionTurnStore(sessionstore.Config{Registry: registry, Store: store, Frozen: fz, Cache: cache, Now: now, PrepareGuard: compaction.RequireIdle})
 	if err != nil {
 		return nil, err
 	}
@@ -161,8 +161,8 @@ func New(p Ports) (*Kernel, error) { //nolint:gocritic // hugeParam: Ports is a 
 	projections := session.NewProjectionReader(store, registry, cache)
 	content := sessionstore.NewContent(fz)
 	return &Kernel{
-		Store: store, Writers: writers, Registry: registry, Admission: admission, Runs: runs,
-		Turns: &Coordinator{Projections: projections, Runs: runs, Now: now},
+		Store: store, Writers: writers, Registry: registry, Admission: admission, TurnStore: turns,
+		Turns: &Coordinator{Projections: projections, TurnStore: turns, Now: now},
 		Bus:   bus, Tailer: tailer, Frozen: fz, Projections: projections, Content: content,
 		Chatlog: &chatlog.Commands{Now: now},
 		History: history.History{Store: store, Registry: registry, Projections: projections},
@@ -175,7 +175,7 @@ func New(p Ports) (*Kernel, error) { //nolint:gocritic // hugeParam: Ports is a 
 // authoritative projections.
 func NewRegistry(extensions []module.ModuleDescriptor) (*module.Registry, error) {
 	return module.BuildRegistryWithExtensions(
-		[]module.ModuleDescriptor{chatlog.Module, sessionstore.Module, turn.Module, compaction.Module}, extensions)
+		[]module.ModuleDescriptor{chatlog.Module, sessionstore.Module, compaction.Module}, extensions)
 }
 
 // Close ends the Kernel's durable read/tailer resources. Caller-owned Writers
@@ -231,9 +231,8 @@ func (a *Kernel) Fork(ctx context.Context, req ForkRequest) (session.SegmentHead
 	if req.Parent == req.Child {
 		return session.SegmentHeader{}, errors.New("sessionkernel: a session cannot fork itself")
 	}
-	// A fork point inside a Turn would hand the child a Turn whose Run is
-	// the parent's execution: semantic history branches only at
-	// quiescent points.
+	// Semantic history branches at a completed Turn boundary so the child
+	// inherits context without inheriting an active execution obligation.
 	if active, ok, err := a.History.ActiveAt(ctx, req.Parent, req.At); err != nil {
 		return session.SegmentHeader{}, err
 	} else if ok {

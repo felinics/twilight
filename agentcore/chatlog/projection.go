@@ -6,8 +6,8 @@ import (
 	"github.com/felinics/twilight/agentcore/jsonstable"
 	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/module"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/sessionstore"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
 )
 
 const (
@@ -75,10 +75,6 @@ type Surface struct {
 	EntryOrder  []SurfaceEntry                      `json:"entryOrder"`
 	Superseded  Table[ToolResultID, ToolResultID]   `json:"superseded,omitzero"`
 	Compactions Table[CompactionID, CompactionView] `json:"compactions,omitzero"`
-	// Runs maps each active Run of the Session to its Turn (attempt/started)
-	// and schema version so the
-	// entries folded from Run facts carry their TurnID.
-	Runs Table[run.RunID, RunOwner] `json:"runs,omitzero"`
 }
 
 // SubmittedInputs returns inputs still awaiting delivery, in submission order.
@@ -107,13 +103,13 @@ func sortViews(views []InputView) {
 }
 
 // chatlogConsumes is what both projections fold: the module's own facts and
-// the Run facts that produce assistant and tool_result entries, and the
+// the Turn facts that produce assistant and tool_result entries, and the
 // attempt binding that names their Turn.
 var chatlogConsumes = func() []ledger.EventType {
-	out := make([]ledger.EventType, 0, 9+len(consumedRunFacts))
-	out = append(out, TypeInputSubmitted, TypeInputDelivered, TypeInputWithdrawn, TypeInputRejected,
+	out := make([]ledger.EventType, 0, 9+len(consumedTurnFacts))
+	out = append(out, TypeInputSubmitted, TypeInputWithdrawn, TypeInputRejected,
 		TypeToolResultSuperseded, TypeSummary, TypeCompactionCreated, TypeCompactionInvalidated)
-	for _, name := range consumedRunFacts {
+	for _, name := range consumedTurnFacts {
 		out = append(out, sessionstore.Type(name))
 	}
 	return out
@@ -122,7 +118,7 @@ var chatlogConsumes = func() []ledger.EventType {
 var SurfaceProjection = module.ProjectionDefinition{
 	ID: SurfaceProjectionID, Version: 1,
 	Consumes: chatlogConsumes,
-	// Assistant and tool_result entries are projected from run facts
+	// Assistant and tool_result entries are projected from Turn facts
 	// a fork inherits that conversation content.
 	Inherits:      module.InheritAll,
 	Authoritative: true,
@@ -155,16 +151,6 @@ func applySurface(state any, e module.DecodedEvent) (any, error) { //nolint:gocr
 			return nil, err
 		}
 		s.Inputs = s.Inputs.Set(p.InputID, InputView{Input: Input{ID: p.InputID, Content: p.Content, Digest: d}, Status: InputSubmitted, Position: pos})
-	case InputDeliveredPayload:
-		v, ok := s.Inputs.Get(p.InputID)
-		if !ok || v.Status != InputSubmitted {
-			return nil, fmt.Errorf("input %s delivered while %s", p.InputID, v.Status)
-		}
-		v.Status = InputDelivered
-		v.Input.TurnID = p.TurnID
-		s.Inputs = s.Inputs.Set(p.InputID, v)
-		s.EntryOrder = append(s.EntryOrder, SurfaceEntry{Kind: EntryInput, ID: string(p.InputID), Position: pos})
-		s.Runs = s.Runs.Set(p.RunID, RunOwner{TurnID: p.TurnID})
 	case InputWithdrawnPayload:
 		if err := terminateInput(&s, p.InputID, InputWithdrawn); err != nil {
 			return nil, err
@@ -174,7 +160,7 @@ func applySurface(state any, e module.DecodedEvent) (any, error) { //nolint:gocr
 			return nil, err
 		}
 	case sessionstore.Event:
-		return s.applyRun(p, e.Position)
+		return s.applyTurn(p, e.Position)
 	case ToolResultSupersededPayload:
 		old, ok := s.ToolResults.Get(p.ToolResultID)
 		if !ok {
@@ -219,18 +205,23 @@ func applySurface(state any, e module.DecodedEvent) (any, error) { //nolint:gocr
 	return s, nil
 }
 
-// applyRun folds one Run fact into the Surface. The
-// Run's Turn is remembered from run_created until run_ended: no fact of the
-// Run follows its end, so the table is bounded by the Runs active now.
-func (s Surface) applyRun(ev sessionstore.Event, pos ledger.Position) (any, error) { //nolint:gocritic // hugeParam: projection Apply is copy-on-write over value states; DecodedEvent is the extension API shape
+// applyTurn folds authoritative Turn facts into conversation entries and
+// derives input delivery directly from InputAccepted.
+func (s Surface) applyTurn(ev sessionstore.Event, pos ledger.Position) (any, error) { //nolint:gocritic // hugeParam: projection Apply is copy-on-write over value states; DecodedEvent is the extension API shape
 	switch f := ev.Fact.(type) {
-	case run.RunCreated:
-		// The Run's Turn comes from the input_delivered that fed it.
-	case run.RunEnded:
-		s.Runs = s.Runs.Delete(ev.RunID)
-	case run.ModelStepCompleted:
-		owner, _ := s.Runs.Get(ev.RunID)
-		a, err := assistantOf(owner, ev.RunID, &f)
+	case turn.TurnStarted:
+	case turn.InputAccepted:
+		id := InputID(f.Input.ID)
+		v, ok := s.Inputs.Get(id)
+		if !ok || v.Status != InputSubmitted || v.Input.Digest != f.Input.Digest {
+			return nil, fmt.Errorf("input %s accepted without matching submission", id)
+		}
+		v.Status, v.Input.TurnID = InputDelivered, ev.TurnID
+		s.Inputs = s.Inputs.Set(id, v)
+		s.EntryOrder = append(s.EntryOrder, SurfaceEntry{Kind: EntryInput, ID: string(id), Position: pos})
+	case turn.TurnEnded:
+	case turn.ModelStepCompleted:
+		a, err := assistantOf(ev.TurnID, &f)
 		if err != nil {
 			return nil, err
 		}
@@ -239,7 +230,7 @@ func (s Surface) applyRun(ev sessionstore.Event, pos ledger.Position) (any, erro
 		}
 		s.Assistants = s.Assistants.Set(a.ID, a)
 		s.EntryOrder = append(s.EntryOrder, SurfaceEntry{Kind: EntryAssistant, ID: string(a.ID), Position: pos})
-	case run.ToolStepOpened:
+	case turn.ToolStepOpened:
 		a, ok := s.Assistants.Get(AssistantIDFor(f.Source))
 		if !ok {
 			return nil, fmt.Errorf("tool step %s opened for unknown assistant %s", f.StepID, f.Source)
@@ -248,9 +239,8 @@ func (s Surface) applyRun(ev sessionstore.Event, pos ledger.Position) (any, erro
 			return nil, err
 		}
 		s.Assistants = s.Assistants.Set(a.ID, a)
-	case run.ToolCallCompleted, run.ToolCallAnswered, run.ToolCallFailed:
-		owner, _ := s.Runs.Get(ev.RunID)
-		r, err := toolResultOf(owner.TurnID, ev.RunID, ev.Fact)
+	case turn.ToolCallCompleted, turn.ToolCallAnswered, turn.ToolCallFailed:
+		r, err := toolResultOf(ev.TurnID, ev.Fact)
 		if err != nil {
 			return nil, err
 		}
@@ -260,14 +250,14 @@ func (s Surface) applyRun(ev sessionstore.Event, pos ledger.Position) (any, erro
 		s.ToolResults = s.ToolResults.Set(r.ID, r)
 		s.EntryOrder = append(s.EntryOrder, SurfaceEntry{Kind: EntryToolResult, ID: string(r.ID), Position: pos})
 	default:
-		return nil, fmt.Errorf("chatlog surface: unexpected run fact %T", ev.Fact)
+		return nil, fmt.Errorf("chatlog surface: unexpected Turn fact %T", ev.Fact)
 	}
 	return s, nil
 }
 
 // assistantOf projects ModelStepCompleted into a structural entry.
-func assistantOf(owner RunOwner, runID run.RunID, f *run.ModelStepCompleted) (Assistant, error) {
-	a := Assistant{ID: AssistantIDFor(f.StepID), TurnID: owner.TurnID, RunID: runID, StepID: f.StepID,
+func assistantOf(turnID turn.TurnID, f *turn.ModelStepCompleted) (Assistant, error) {
+	a := Assistant{ID: AssistantIDFor(f.StepID), TurnID: turnID, StepID: f.StepID,
 		FinishReason: f.FinishReason, ResultDigest: f.ResultDigest}
 	d, err := DigestAssistant(&a)
 	if err != nil {
@@ -279,7 +269,7 @@ func assistantOf(owner RunOwner, runID run.RunID, f *run.ModelStepCompleted) (As
 
 // attachCalls records the CallIDs ToolStepOpened assigned, in the result's
 // ToolCalls order, on the assistant that issued them.
-func attachCalls(a *Assistant, f *run.ToolStepOpened) error {
+func attachCalls(a *Assistant, f *turn.ToolStepOpened) error {
 	if len(a.CallIDs) != 0 {
 		return fmt.Errorf("assistant %s opened a tool step twice", a.ID)
 	}
@@ -297,16 +287,16 @@ func attachCalls(a *Assistant, f *run.ToolStepOpened) error {
 
 // toolResultOf projects a call's terminal fact into a structural entry
 // (semantics: Unknown outcome or effect_unknown class is status unknown, every other failure is error).
-func toolResultOf(turnID TurnID, runID run.RunID, fact run.Fact) (ToolResult, error) {
+func toolResultOf(turnID TurnID, fact turn.Fact) (ToolResult, error) {
 	var r ToolResult
 	switch f := fact.(type) {
-	case run.ToolCallCompleted:
+	case turn.ToolCallCompleted:
 		r = ToolResult{CallID: CallID(f.CallID), Status: ToolSuccess, Source: SourceToolOutput, OutputDigest: f.OutputDigest}
-	case run.ToolCallAnswered:
+	case turn.ToolCallAnswered:
 		r = ToolResult{CallID: CallID(f.CallID), Status: ToolSuccess, Source: SourceToolResponse, OutputDigest: f.ResponseDigest}
-	case run.ToolCallFailed:
+	case turn.ToolCallFailed:
 		status := ToolError
-		if f.Outcome == run.ToolOutcomeUnknown || f.Failure.Class == run.FailureEffectUnknown {
+		if f.Outcome == turn.ToolOutcomeUnknown || f.Failure.Class == turn.FailureEffectUnknown {
 			status = ToolUnknown
 		}
 		failure := f.Failure
@@ -314,7 +304,7 @@ func toolResultOf(turnID TurnID, runID run.RunID, fact run.Fact) (ToolResult, er
 	default:
 		return ToolResult{}, fmt.Errorf("chatlog: %T is not a tool result fact", fact)
 	}
-	r.ID, r.TurnID, r.RunID = ToolResultIDFor(run.CallID(r.CallID)), turnID, runID
+	r.ID, r.TurnID = ToolResultIDFor(turn.CallID(r.CallID)), turnID
 	d, err := DigestToolResult(&r)
 	if err != nil {
 		return ToolResult{}, err
@@ -326,11 +316,11 @@ func toolResultOf(turnID TurnID, runID run.RunID, fact run.Fact) (ToolResult, er
 // supersedingResult is the entry an out-of-band verification substitutes for
 // old: same call, the verified status and body.
 func supersedingResult(old *ToolResult, p *ToolResultSupersededPayload) (ToolResult, error) {
-	r := ToolResult{ID: SupersedingToolResultID(old.ID), TurnID: old.TurnID, RunID: old.RunID, CallID: old.CallID, Status: p.Status}
+	r := ToolResult{ID: SupersedingToolResultID(old.ID), TurnID: old.TurnID, CallID: old.CallID, Status: p.Status}
 	if p.Status == ToolSuccess {
 		r.Source, r.OutputDigest = SourceToolOutput, p.OutputDigest
 	} else {
-		r.Failure = &run.ToolFailure{Class: "superseded", Message: p.Reason}
+		r.Failure = &turn.ToolFailure{Class: "superseded", Message: p.Reason}
 	}
 	d, err := DigestToolResult(&r)
 	if err != nil {
@@ -402,13 +392,12 @@ type AppliedCompaction struct {
 
 // Context is the projection state: the ordered entries plus the bookkeeping
 // ContextFold needs (submitted inputs awaiting delivery, superseded results,
-// applied compactions, the Turn of each Run).
+// applied compactions, the Turn of each Turn).
 type Context struct {
 	Entries     []Entry                       `json:"entries"`
 	Pending     map[InputID]Input             `json:"pending,omitempty"`
 	Superseded  map[ToolResultID]ToolResultID `json:"superseded,omitempty"`
 	Compactions []AppliedCompaction           `json:"compactions,omitempty"`
-	Runs        map[run.RunID]RunOwner        `json:"runs,omitempty"`
 }
 
 var ContextProjection = module.ProjectionDefinition{
@@ -417,7 +406,7 @@ var ContextProjection = module.ProjectionDefinition{
 	Inherits:      module.InheritAll,
 	Authoritative: true,
 	Initial: func() (any, error) {
-		return Context{Pending: map[InputID]Input{}, Superseded: map[ToolResultID]ToolResultID{}, Runs: map[run.RunID]RunOwner{}}, nil
+		return Context{Pending: map[InputID]Input{}, Superseded: map[ToolResultID]ToolResultID{}}, nil
 	},
 	Apply:      applyContext,
 	StateCodec: module.JSONStateCodec[Context]{},
@@ -442,17 +431,6 @@ func applyContext(state any, e module.DecodedEvent) (any, error) { //nolint:gocr
 		}
 		c.Pending = cow(c.Pending)
 		c.Pending[p.InputID] = Input{ID: p.InputID, Content: p.Content, Digest: d}
-	case InputDeliveredPayload:
-		in, ok := c.Pending[p.InputID]
-		if !ok {
-			return nil, fmt.Errorf("input %s delivered before submission", p.InputID)
-		}
-		c.Pending = cow(c.Pending)
-		delete(c.Pending, p.InputID)
-		in.TurnID = p.TurnID
-		c.Entries = append(c.Entries, Entry{Kind: EntryInput, ID: string(in.ID), Digest: in.Digest, Position: pos, Input: &in})
-		c.Runs = cow(c.Runs)
-		c.Runs[p.RunID] = RunOwner{TurnID: p.TurnID}
 	case InputWithdrawnPayload:
 		c.Pending = cow(c.Pending)
 		delete(c.Pending, p.InputID)
@@ -460,7 +438,7 @@ func applyContext(state any, e module.DecodedEvent) (any, error) { //nolint:gocr
 		c.Pending = cow(c.Pending)
 		delete(c.Pending, p.InputID)
 	case sessionstore.Event:
-		return c.applyRun(p, e.Position)
+		return c.applyTurn(p, e.Position)
 	case ToolResultSupersededPayload:
 		i := c.indexOf(EntryToolResult, string(p.ToolResultID))
 		if i < 0 {
@@ -505,22 +483,28 @@ func applyContext(state any, e module.DecodedEvent) (any, error) { //nolint:gocr
 	return c, nil
 }
 
-// applyRun folds one Run fact into the Context. Runs is bounded
-// like the Surface's: the Turn is forgotten at run_ended.
-func (c Context) applyRun(ev sessionstore.Event, pos ledger.Position) (any, error) {
+// applyTurn folds authoritative Turn facts into request context.
+func (c Context) applyTurn(ev sessionstore.Event, pos ledger.Position) (any, error) {
 	switch f := ev.Fact.(type) {
-	case run.RunCreated:
-		// The Run's Turn comes from the input_delivered that fed it.
-	case run.RunEnded:
-		c.Runs = cow(c.Runs)
-		delete(c.Runs, ev.RunID)
-	case run.ModelStepCompleted:
-		a, err := assistantOf(c.Runs[ev.RunID], ev.RunID, &f)
+	case turn.TurnStarted:
+	case turn.InputAccepted:
+		id := InputID(f.Input.ID)
+		in, ok := c.Pending[id]
+		if !ok || in.Digest != f.Input.Digest {
+			return nil, fmt.Errorf("input %s accepted without matching submission", id)
+		}
+		c.Pending = cow(c.Pending)
+		delete(c.Pending, id)
+		in.TurnID = ev.TurnID
+		c.Entries = append(c.Entries, Entry{Kind: EntryInput, ID: string(id), Digest: in.Digest, Position: pos, Input: &in})
+	case turn.TurnEnded:
+	case turn.ModelStepCompleted:
+		a, err := assistantOf(ev.TurnID, &f)
 		if err != nil {
 			return nil, err
 		}
 		c.Entries = append(c.Entries, Entry{Kind: EntryAssistant, ID: string(a.ID), Digest: a.Digest, Position: pos, Assistant: &a})
-	case run.ToolStepOpened:
+	case turn.ToolStepOpened:
 		i := c.indexOf(EntryAssistant, string(AssistantIDFor(f.Source)))
 		if i < 0 {
 			return nil, fmt.Errorf("tool step %s opened for assistant %s outside the active context", f.StepID, f.Source)
@@ -532,14 +516,14 @@ func (c Context) applyRun(ev sessionstore.Event, pos ledger.Position) (any, erro
 		entries := append([]Entry(nil), c.Entries...)
 		entries[i].Assistant, entries[i].Digest = &a, a.Digest
 		c.Entries = entries
-	case run.ToolCallCompleted, run.ToolCallAnswered, run.ToolCallFailed:
-		r, err := toolResultOf(c.Runs[ev.RunID].TurnID, ev.RunID, ev.Fact)
+	case turn.ToolCallCompleted, turn.ToolCallAnswered, turn.ToolCallFailed:
+		r, err := toolResultOf(ev.TurnID, ev.Fact)
 		if err != nil {
 			return nil, err
 		}
 		c.Entries = append(c.Entries, Entry{Kind: EntryToolResult, ID: string(r.ID), Digest: r.Digest, Position: pos, ToolResult: &r})
 	default:
-		return nil, fmt.Errorf("chatlog context: unexpected run fact %T", ev.Fact)
+		return nil, fmt.Errorf("chatlog context: unexpected Turn fact %T", ev.Fact)
 	}
 	return c, nil
 }
@@ -613,13 +597,13 @@ func selectRetained(base []Entry, pairs []EntryDigestPair) ([]Entry, error) {
 	return out, nil
 }
 
-// ContextFold folds decoded chatlog and run events into entries.
+// ContextFold folds decoded chatlog and Turn events into entries.
 func ContextFold(events []module.DecodedEvent) ([]Entry, error) {
 	state, _ := ContextProjection.Initial()
 	for i := range events {
 		e := &events[i]
 		if e.Unknown || (e.Module != module.TwilightModule(ModuleID) && e.Module != module.TwilightModule(sessionstore.ModuleID)) {
-			return nil, errors.New("chatlog: context fold requires decoded chatlog or run events")
+			return nil, errors.New("chatlog: context fold requires decoded chatlog or Turn events")
 		}
 		next, err := applyContext(state, *e)
 		if err != nil {

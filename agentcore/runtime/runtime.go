@@ -6,11 +6,11 @@ package runtime
 import (
 	"context"
 	"errors"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
 
 	"github.com/felinics/twilight/agentcore/chatlog"
 	"github.com/felinics/twilight/agentcore/driver"
 	"github.com/felinics/twilight/agentcore/preset"
-	"github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/session/writer"
 	"github.com/felinics/twilight/agentcore/sessionkernel"
 	"github.com/felinics/twilight/agentcore/turn"
@@ -56,22 +56,22 @@ func New(cfg Config) (*SessionRuntime, error) {
 		chat: cfg.Chatlog, preset: cfg.Preset, newID: newID}, nil
 }
 
-func (r *SessionRuntime) ref(id turn.TurnID) turn.TurnRef {
-	return turn.TurnRef{SessionID: r.w.SessionID(), TurnID: id}
+func (r *SessionRuntime) ref(id turn.TurnID) sessionstore.TurnRef {
+	return sessionstore.TurnRef{SessionID: r.w.SessionID(), TurnID: id}
 }
 
-func (r *SessionRuntime) QueueInput(ctx context.Context, id run.InputID, content run.CanonicalJSON) (run.AgentInput, error) {
+func (r *SessionRuntime) QueueInput(ctx context.Context, id turn.InputID, content turn.CanonicalJSON) (turn.AgentInput, error) {
 	return r.chat.Submit(ctx, r.w, id, content)
 }
 
 // DeliverInput explicitly targets a Turn; it never changes the placement of
 // a queued input implicitly or waits for the Turn to finish.
-func (r *SessionRuntime) DeliverInput(ctx context.Context, id turn.TurnID, input run.InputID, content run.CanonicalJSON) (sessionkernel.TurnResult, error) {
+func (r *SessionRuntime) DeliverInput(ctx context.Context, id turn.TurnID, input turn.InputID, content turn.CanonicalJSON) (sessionkernel.TurnResult, error) {
 	in, err := r.QueueInput(ctx, input, content)
 	if err != nil {
 		return sessionkernel.TurnResult{}, err
 	}
-	return r.turns.Deliver(ctx, r.w, sessionkernel.DeliverRequest{Ref: r.ref(id), Inputs: []run.AgentInput{in}})
+	return r.turns.Deliver(ctx, r.w, sessionkernel.DeliverRequest{Ref: r.ref(id), Inputs: []turn.AgentInput{in}})
 }
 
 // Step advances an active Turn or routes submitted inputs into the next Turn.
@@ -81,14 +81,14 @@ func (r *SessionRuntime) Step(ctx context.Context) (driver.StepResult, error) {
 	if err := ctx.Err(); err != nil {
 		return driver.StepResult{}, err
 	}
-	surface, err := turn.ReadSurface(ctx, r.w.Projections(), r.w.SessionID())
+	surface, err := sessionstore.ReadSurface(ctx, r.w.Projections(), r.w.SessionID())
 	if err != nil {
 		return driver.StepResult{}, err
 	}
 	if active, ok := surface.Active(); ok {
 		return r.driver.Step(ctx, r.w, active.TurnID)
 	}
-	// A Session can have outstanding maintenance without any active Run.
+	// A Session can have outstanding maintenance without any active Turn.
 	if r.driver.Compactions != nil {
 		res, err := r.driver.Compactions.Advance(ctx, r.w)
 		if err != nil {
@@ -106,9 +106,9 @@ func (r *SessionRuntime) Step(ctx context.Context) (driver.StepResult, error) {
 	if len(pending) == 0 {
 		return driver.StepResult{Disposition: driver.Finished}, nil
 	}
-	inputs := make([]run.AgentInput, len(pending))
+	inputs := make([]turn.AgentInput, len(pending))
 	for i, in := range pending {
-		inputs[i] = run.AgentInput{ID: run.InputID(in.ID), Digest: in.Digest}
+		inputs[i] = turn.AgentInput{ID: turn.InputID(in.ID), Digest: in.Digest}
 	}
 	_, err = r.turns.Start(ctx, r.w, sessionkernel.StartRequest{Ref: r.ref(r.newID()), Inputs: inputs, Preset: r.preset})
 	return driver.StepResult{Disposition: driver.Continue}, err
@@ -117,7 +117,7 @@ func (r *SessionRuntime) Step(ctx context.Context) (driver.StepResult, error) {
 // Stop records the domain cancellation. Physical cancellation is recovered
 // from that durable disposition, never inferred from an Activation's context.
 func (r *SessionRuntime) Stop(ctx context.Context, reason string) (sessionkernel.TurnResult, bool, error) {
-	surface, err := turn.ReadSurface(ctx, r.w.Projections(), r.w.SessionID())
+	surface, err := sessionstore.ReadSurface(ctx, r.w.Projections(), r.w.SessionID())
 	if err != nil {
 		return sessionkernel.TurnResult{}, false, err
 	}

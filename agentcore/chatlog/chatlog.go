@@ -2,7 +2,7 @@
 // conversation's facts -- the input lifecycle, summaries, compactions and
 // out-of-band result supersession -- and projects the conversation (Surface)
 // and the model-facing context (Context) from those facts together with the
-// Run facts of agentcore/run. Assistant and tool_result entries are
+// Turn facts of agentcore/turn. Assistant and tool_result entries are
 // projections of ModelStepCompleted, ToolCallCompleted, ToolCallAnswered and
 // ToolCallFailed: the module writes no second copy of a model or tool
 // outcome. Turn lifecycle belongs to agentcore/turn.
@@ -16,15 +16,15 @@ import (
 	"github.com/felinics/twilight/agentcore/jsonstable"
 	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/module"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/model"
-	"github.com/felinics/twilight/agentcore/run/sessionstore"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/model"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
 )
 
 const ModuleID module.ModuleID = "chatlog"
 
 type (
-	TurnID       string
+	TurnID       = turn.TurnID
 	InputID      string
 	AssistantID  string
 	ToolResultID string
@@ -39,7 +39,6 @@ type (
 // out-of-band verification.
 const (
 	TypeInputSubmitted        ledger.EventType = "twilight/chatlog/input_submitted"
-	TypeInputDelivered        ledger.EventType = "twilight/chatlog/input_delivered"
 	TypeInputWithdrawn        ledger.EventType = "twilight/chatlog/input_withdrawn"
 	TypeInputRejected         ledger.EventType = "twilight/chatlog/input_rejected"
 	TypeToolResultSuperseded  ledger.EventType = "twilight/chatlog/tool_result_superseded"
@@ -49,7 +48,7 @@ const (
 )
 
 // Digest domains of the projected entries. They are not event
-// types: an assistant or tool_result entry is folded from Run facts.
+// types: an assistant or tool_result entry is folded from Turn facts.
 const (
 	assistantDomain  = "twilight/chatlog/assistant"
 	toolResultDomain = "twilight/chatlog/tool_result"
@@ -198,17 +197,10 @@ type Input struct {
 // the frozen ModelResult, and the CallIDs of the calls the result issued, in
 // the result's ToolCalls order (from ToolStepOpened). The text, reasoning and
 // tool call arguments live in the frozen body; Materialize resolves them.
-// RunOwner is what the chatlog remembers of an active Run: the Turn its
-// entries belong to and the schema its identities derive under.
-type RunOwner struct {
-	TurnID TurnID `json:"turnId,omitempty"`
-}
-
 type Assistant struct {
 	ID           AssistantID        `json:"id"`
 	TurnID       TurnID             `json:"turnId,omitempty"`
-	RunID        run.RunID          `json:"runId"`
-	StepID       run.StepID         `json:"stepId"`
+	StepID       turn.StepID        `json:"stepId"`
 	FinishReason model.FinishReason `json:"finishReason"`
 	ResultDigest jsonstable.Digest  `json:"resultDigest"`
 	CallIDs      []CallID           `json:"callIds,omitempty"`
@@ -217,16 +209,15 @@ type Assistant struct {
 
 // ToolResult is the structural projection of one call's terminal outcome
 // success names the frozen output or response by digest;
-// error and unknown carry the Run-recorded failure.
+// error and unknown carry the Turn-recorded failure.
 type ToolResult struct {
 	ID           ToolResultID      `json:"id"`
 	TurnID       TurnID            `json:"turnId,omitempty"`
-	RunID        run.RunID         `json:"runId"`
 	CallID       CallID            `json:"callId"`
 	Status       ToolResultStatus  `json:"status"`
 	Source       ToolResultSource  `json:"source,omitempty"`
 	OutputDigest jsonstable.Digest `json:"outputDigest,omitempty"`
-	Failure      *run.ToolFailure  `json:"failure,omitempty"`
+	Failure      *turn.ToolFailure `json:"failure,omitempty"`
 	Digest       jsonstable.Digest `json:"digest"`
 }
 
@@ -249,12 +240,12 @@ type Summary struct {
 }
 
 // AssistantIDFor is the entry identity of a model step's result: the StepID
-// itself, which is unique across Runs.
-func AssistantIDFor(step run.StepID) AssistantID { return AssistantID(step) }
+// itself, which is unique across TurnStore.
+func AssistantIDFor(step turn.StepID) AssistantID { return AssistantID(step) }
 
 // ToolResultIDFor is the entry identity of a call's terminal result: the
 // CallID itself.
-func ToolResultIDFor(call run.CallID) ToolResultID { return ToolResultID(call) }
+func ToolResultIDFor(call turn.CallID) ToolResultID { return ToolResultID(call) }
 
 // SupersedingToolResultID is the identity of the result an out-of-band
 // verification substitutes for id.
@@ -274,25 +265,23 @@ func DigestAssistant(a *Assistant) (jsonstable.Digest, error) {
 	return digestDomain(assistantDomain, struct {
 		ID           AssistantID        `json:"id"`
 		TurnID       TurnID             `json:"turnId,omitempty"`
-		RunID        run.RunID          `json:"runId"`
-		StepID       run.StepID         `json:"stepId"`
+		StepID       turn.StepID        `json:"stepId"`
 		FinishReason model.FinishReason `json:"finishReason"`
 		ResultDigest jsonstable.Digest  `json:"resultDigest"`
 		CallIDs      []CallID           `json:"callIds,omitempty"`
-	}{a.ID, a.TurnID, a.RunID, a.StepID, a.FinishReason, a.ResultDigest, a.CallIDs})
+	}{a.ID, a.TurnID, a.StepID, a.FinishReason, a.ResultDigest, a.CallIDs})
 }
 
 func DigestToolResult(r *ToolResult) (jsonstable.Digest, error) {
 	return digestDomain(toolResultDomain, struct {
 		ID           ToolResultID      `json:"id"`
 		TurnID       TurnID            `json:"turnId,omitempty"`
-		RunID        run.RunID         `json:"runId"`
 		CallID       CallID            `json:"callId"`
 		Status       ToolResultStatus  `json:"status"`
 		Source       ToolResultSource  `json:"source,omitempty"`
 		OutputDigest jsonstable.Digest `json:"outputDigest,omitempty"`
-		Failure      *run.ToolFailure  `json:"failure,omitempty"`
-	}{r.ID, r.TurnID, r.RunID, r.CallID, r.Status, r.Source, r.OutputDigest, r.Failure})
+		Failure      *turn.ToolFailure `json:"failure,omitempty"`
+	}{r.ID, r.TurnID, r.CallID, r.Status, r.Source, r.OutputDigest, r.Failure})
 }
 
 func DigestSummary(s *Summary) (jsonstable.Digest, error) {
@@ -352,15 +341,6 @@ type InputSubmittedPayload struct {
 	SubmittedAtUnixMilli int64            `json:"submittedAtUnixMilli"`
 }
 
-// InputDeliveredPayload records an input entering a Turn's Run: the Turn
-// and the one Run that executes it. The chatlog learns which
-// Turn a Run serves from this delivery, so the entries it folds from that
-// Run's facts carry the Turn.
-type InputDeliveredPayload struct {
-	InputID InputID   `json:"inputId"`
-	TurnID  TurnID    `json:"turnId"`
-	RunID   run.RunID `json:"runId"`
-}
 type InputWithdrawnPayload struct {
 	InputID InputID `json:"inputId"`
 	Reason  string  `json:"reason,omitempty"`
@@ -373,7 +353,7 @@ type InputRejectedPayload struct {
 // ToolResultSupersededPayload substitutes a verified outcome for a call's
 // projected result: an unknown result the Application confirmed
 // out of band becomes success (its output frozen under OutputDigest, written
-// through the run frozen.Store) or error. The Run fact is untouched; the
+// through the turn frozen.Store) or error. The Turn fact is untouched; the
 // substitution is a conversation decision.
 type ToolResultSupersededPayload struct {
 	ToolResultID ToolResultID      `json:"toolResultId"`
@@ -484,7 +464,7 @@ var PartsExtractor module.BindingExtractor = module.BindingExtractorFunc(func(va
 })
 
 // supersededExtractor names the frozen output a success supersession
-// carries, under the run module's frozen Binding derivation.
+// carries, under the turn module's frozen Binding derivation.
 var supersededExtractor module.BindingExtractor = module.BindingExtractorFunc(func(val any) ([]artifact.BindingID, error) {
 	p, ok := val.(ToolResultSupersededPayload)
 	if !ok {
@@ -528,36 +508,30 @@ func def[T any](typ ledger.EventType, check func(*T) error, bindings ...module.B
 		Bindings: bindings}
 }
 
-// consumedRunFacts are the Run facts the chatlog projections fold
-// run_created for the Run's Turn, the model and tool outcomes
+// consumedTurnFacts are the Turn facts the chatlog projections fold
+// turn_started for the Turn's Turn, the model and tool outcomes
 // for the entries, tool_step_opened for the CallIDs a result issued, and
-// run_ended to forget the Run's Turn.
-var consumedRunFacts = []string{"model_step_completed", "tool_step_opened", "tool_call_completed", "tool_call_answered", "tool_call_failed", "run_ended"}
+// turn_ended to forget the Turn's Turn.
+var consumedTurnFacts = []string{"input_accepted", "model_step_completed", "tool_step_opened", "tool_call_completed", "tool_call_answered", "tool_call_failed", "turn_ended"}
 
-func runRequirement() module.ModuleRequirement {
-	events := make([]ledger.EventType, 0, len(consumedRunFacts))
-	for _, name := range consumedRunFacts {
+func turnRequirement() module.ModuleRequirement {
+	events := make([]ledger.EventType, 0, len(consumedTurnFacts))
+	for _, name := range consumedTurnFacts {
 		events = append(events, sessionstore.Type(name))
 	}
 	return module.ModuleRequirement{Source: module.SourceTwilight, Module: sessionstore.ModuleID, Events: events}
 }
 
-// Module is the chatlog ModuleDescriptor (Requires run facts).
+// Module is the chatlog ModuleDescriptor (Requires Turn facts).
 var Module = module.ModuleDescriptor{
 	Source:   module.SourceTwilight,
 	ID:       ModuleID,
 	Streams:  []module.StreamDefinition{streamDefinition},
-	Requires: []module.ModuleRequirement{runRequirement()},
+	Requires: []module.ModuleRequirement{turnRequirement()},
 	Events: []module.EventDefinition{
 		def[InputSubmittedPayload](TypeInputSubmitted, func(p *InputSubmittedPayload) error {
 			if p.InputID == "" || p.Content.IsZero() {
 				return errors.New("input_submitted requires inputId and content")
-			}
-			return nil
-		}),
-		def[InputDeliveredPayload](TypeInputDelivered, func(p *InputDeliveredPayload) error {
-			if p.InputID == "" || p.TurnID == "" || p.RunID == "" {
-				return errors.New("input_delivered requires inputId, turnId and runId")
 			}
 			return nil
 		}),

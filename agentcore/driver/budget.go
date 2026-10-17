@@ -5,8 +5,8 @@ import (
 	"errors"
 
 	"github.com/felinics/twilight/agentcore/prompt"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/model"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/model"
 )
 
 // BudgetPolicy is the default candidate-budget policy. The product supplies
@@ -15,7 +15,7 @@ import (
 // entire candidate, including system messages and tool definitions. This is an
 // estimate, not a guarantee about a provider's eventual usage accounting.
 type BudgetPolicy struct {
-	Budget        func(context.Context, run.ModelRef) (prompt.TokenBudget, error)
+	Budget        func(context.Context, turn.ModelRef) (prompt.TokenBudget, error)
 	Estimate      func(context.Context, *model.ModelRequest) (int, error)
 	RetainEntries int
 	Summary       func(context.Context, *CompactionContext) (SummaryRequest, error)
@@ -30,7 +30,7 @@ func (p *BudgetPolicy) Decide(ctx context.Context, _ prompt.Input, candidate *pr
 	}
 	modelRef := candidate.Model
 	if modelRef == "" {
-		modelRef = run.ModelRef(candidate.Request.Model)
+		modelRef = turn.ModelRef(candidate.Request.Model)
 	}
 	budget, err := p.Budget(ctx, modelRef)
 	if err != nil {

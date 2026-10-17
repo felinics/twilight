@@ -11,6 +11,7 @@ import (
 	"github.com/felinics/twilight/agentcore/module"
 	"github.com/felinics/twilight/agentcore/session"
 	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
 )
 
 // History reads a Session's committed stream for boundary questions.
@@ -50,7 +51,7 @@ func (h History) PrefixCommit(ctx context.Context, sid session.SessionID, turnID
 func (h History) scanBoundary(ctx context.Context, sid session.SessionID, turnID turn.TurnID, includeInputs bool) (ledger.CommitSeq, error) {
 	var inputIDs map[chatlog.InputID]struct{}
 	if includeInputs {
-		surface, err := turn.ReadSurface(ctx, h.Projections, sid)
+		surface, err := sessionstore.ReadSurface(ctx, h.Projections, sid)
 		if err != nil {
 			return 0, err
 		}
@@ -60,7 +61,7 @@ func (h History) scanBoundary(ctx context.Context, sid session.SessionID, turnID
 		}
 		inputIDs = make(map[chatlog.InputID]struct{}, len(view.InputIDs))
 		for _, id := range view.InputIDs {
-			inputIDs[id] = struct{}{}
+			inputIDs[chatlog.InputID(id)] = struct{}{}
 		}
 	}
 	var from ledger.CommitSeq
@@ -75,7 +76,7 @@ func (h History) scanBoundary(ctx context.Context, sid session.SessionID, turnID
 			for _, b := range c.Batches {
 				for _, e := range b.Events {
 					switch e.Type {
-					case turn.TypeStarted:
+					case sessionstore.TypeStarted:
 						if hasStarted {
 							continue
 						}
@@ -83,7 +84,7 @@ func (h History) scanBoundary(ctx context.Context, sid session.SessionID, turnID
 						if err != nil || decoded.Unknown {
 							continue
 						}
-						if p, ok := decoded.Value.(turn.StartedPayload); ok && p.TurnID == turnID {
+						if p, ok := decoded.Value.(sessionstore.Event); ok && p.TurnID == turnID {
 							started, hasStarted = c.Seq, true
 						}
 					case chatlog.TypeInputSubmitted:
@@ -122,7 +123,7 @@ func (h History) scanBoundary(ctx context.Context, sid session.SessionID, turnID
 // a point would hand the child a Turn whose execution belongs to the
 // parent, so callers refuse it.
 func (h History) ActiveAt(ctx context.Context, sid session.SessionID, at ledger.CommitSeq) (turn.TurnID, bool, error) {
-	scope, err := h.Registry.ScopeFor(turn.SurfaceProjectionID, turn.SurfaceProjection.Version)
+	scope, err := h.Registry.ScopeFor(sessionstore.SurfaceProjectionID, sessionstore.SurfaceProjection.Version)
 	if err != nil {
 		return "", false, err
 	}
@@ -151,7 +152,7 @@ func (h History) ActiveAt(ctx context.Context, sid session.SessionID, at ledger.
 		}
 		from = page.Commits[len(page.Commits)-1].Seq + 1
 	}
-	surface, ok := state.(turn.TurnSurface)
+	surface, ok := state.(sessionstore.TurnSurface)
 	if !ok {
 		return "", false, fmt.Errorf("history: surface projection is %T", state)
 	}

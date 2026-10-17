@@ -1,6 +1,6 @@
 // Package compaction records Session context-maintenance operations. An
 // operation owns a frozen summary request and its effect identity, but is not
-// a Run or a conversation step. Conversation changes remain chatlog facts.
+// a Turn or a conversation step. Conversation changes remain chatlog facts.
 package compaction
 
 import (
@@ -13,12 +13,12 @@ import (
 	"github.com/felinics/twilight/agentcore/jsonstable"
 	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/module"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/effect"
-	"github.com/felinics/twilight/agentcore/run/sessionstore"
 	"github.com/felinics/twilight/agentcore/session"
 	"github.com/felinics/twilight/agentcore/session/unit"
 	"github.com/felinics/twilight/agentcore/session/writer"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/effect"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
 )
 
 type ID string
@@ -45,14 +45,14 @@ var (
 type Request struct {
 	ID            ID                     `json:"id"`
 	Plan          chatlog.CompactionPlan `json:"plan"`
-	Model         run.ModelRef           `json:"model"`
-	RequestDigest run.Digest             `json:"requestDigest"`
-	Preparation   run.Digest             `json:"preparation,omitempty"`
-	Target        *run.TargetRef         `json:"target,omitempty"`
+	Model         turn.ModelRef          `json:"model"`
+	RequestDigest turn.Digest            `json:"requestDigest"`
+	Preparation   turn.Digest            `json:"preparation,omitempty"`
+	Target        *turn.TargetRef        `json:"target,omitempty"`
 }
 
 func (r *Request) Key(sid session.SessionID) effect.AssignmentKey {
-	return effect.AssignmentKey{Session: run.Scope(sid), RunID: run.RunID("compact-" + r.ID), Effect: run.EffectID("summary-" + r.ID)}
+	return effect.AssignmentKey{Session: turn.Scope(sid), OwnerKind: effect.OwnerCompaction, OwnerID: string(r.ID), Effect: turn.EffectID("summary-" + r.ID)}
 }
 
 // Operation retains the intent after settlement too: an owner can finish the
@@ -237,7 +237,7 @@ func fromView(v writer.View) (State, error) {
 }
 
 // RequireIdle is a PrepareModelRequest consistency guard, evaluated inside
-// the same Writer critical section as the Run command. No candidate can be
+// the same Writer critical section as the Turn command. No candidate can be
 // frozen into a ModelStep while an operation may still replace its context.
 func RequireIdle(v writer.View) error {
 	s, err := fromView(v)
@@ -259,7 +259,7 @@ func fingerprint(r *Request) (jsonstable.Digest, error) {
 }
 
 // Start contributes the durable intent. The caller must additionally enforce
-// its Run quiescence guard in the same unit before this Part is evaluated.
+// its Turn quiescence guard in the same unit before this Part is evaluated.
 func Start(request Request) unit.Part {
 	return unit.PartFunc(func(_ context.Context, v writer.View, now int64) ([]writer.TypedBatch, error) {
 		if err := checkRequest(&RequestedPayload{Request: request}); err != nil {

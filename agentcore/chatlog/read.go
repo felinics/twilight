@@ -5,8 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/session"
+	"github.com/felinics/twilight/agentcore/turn"
 )
 
 // ReadSurface loads the chatlog surface of one Session through r.
@@ -69,7 +69,7 @@ func (s *Surface) LastAssistantText(ctx context.Context, content ContentResolver
 
 // NewInputID mints a collision-free InputID; the chatlog requires
 // session-global uniqueness across restarts.
-func NewInputID() run.InputID { return run.InputID("in-" + randomSuffix(8)) }
+func NewInputID() turn.InputID { return turn.InputID("in-" + randomSuffix(8)) }
 
 func randomSuffix(n int) string {
 	b := make([]byte, n)

@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 // Directory is the optional durable management index of executions. It is

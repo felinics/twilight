@@ -7,8 +7,8 @@ import (
 
 	"github.com/felinics/twilight/agentcore/executor/notice"
 	executionstore "github.com/felinics/twilight/agentcore/executor/store"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 // ExecutionRef is the Executor's physical binding of the current attempt for
@@ -30,7 +30,7 @@ var ErrUnknownProvider = fmt.Errorf("executor: unknown execution provider: %w", 
 type ExecutionBackend interface {
 	// Validate checks that this Backend can serve the Assignment; it produces
 	// no external effect.
-	Validate(ctx context.Context, a effect.Assignment) (*run.ToolFailure, error)
+	Validate(ctx context.Context, a effect.Assignment) (*turn.ToolFailure, error)
 	// Prepare derives the Ref of the Assignment without starting the effect
 	// and without allocating anything outside the Backend: it runs before
 	// the acceptance is written, and an Abort may win that write,
@@ -95,7 +95,7 @@ func MatchModel(a effect.Assignment) bool { _, ok := a.Model(); return ok } //no
 // MatchTool is the Route predicate of tool calls declared with placement
 // a Worker routes by the declaration, never by whether a target
 // is present.
-func MatchTool(placement run.ToolPlacement) func(effect.Assignment) bool {
+func MatchTool(placement turn.ToolPlacement) func(effect.Assignment) bool {
 	return func(a effect.Assignment) bool { //nolint:gocritic // hugeParam: Route.Match takes the Assignment by value
 		t, ok := a.Tool()
 		return ok && t.Placement == placement
@@ -111,7 +111,7 @@ func PortBackend(p effect.ExecutionPort) ExecutionBackend { return portBackend{p
 
 type portBackend struct{ port effect.ExecutionPort }
 
-func (b portBackend) Validate(ctx context.Context, a effect.Assignment) (*run.ToolFailure, error) {
+func (b portBackend) Validate(ctx context.Context, a effect.Assignment) (*turn.ToolFailure, error) {
 	return b.port.Validate(ctx, a)
 }
 

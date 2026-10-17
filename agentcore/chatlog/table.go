@@ -72,8 +72,7 @@ func (t Table[K, V]) Set(k K, v V) Table[K, V] {
 }
 
 // Delete returns a Table without k; the receiver is unchanged. It rebuilds the
-// base, so it costs O(n): callers delete from tables that stay small (the
-// Runs table, bounded by the Runs active now), not from the entry tables.
+// base, so it costs O(n): callers should reserve deletion for small tables.
 func (t Table[K, V]) Delete(k K) Table[K, V] {
 	if !t.Has(k) {
 		return t

@@ -6,16 +6,15 @@ import (
 	"fmt"
 
 	"github.com/felinics/twilight/agentcore/compaction"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/effect"
-	"github.com/felinics/twilight/agentcore/run/loop"
-	"github.com/felinics/twilight/agentcore/run/plan"
-	"github.com/felinics/twilight/agentcore/run/reconcile"
-	"github.com/felinics/twilight/agentcore/run/redispatch"
-	"github.com/felinics/twilight/agentcore/run/sessionstore"
-	"github.com/felinics/twilight/agentcore/run/store"
 	"github.com/felinics/twilight/agentcore/session/writer"
 	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/effect"
+	"github.com/felinics/twilight/agentcore/turn/loop"
+	"github.com/felinics/twilight/agentcore/turn/plan"
+	"github.com/felinics/twilight/agentcore/turn/reconcile"
+	"github.com/felinics/twilight/agentcore/turn/redispatch"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
+	"github.com/felinics/twilight/agentcore/turn/store"
 )
 
 // Disposition describes work, not ownership or an Activation's lifecycle.
@@ -38,7 +37,7 @@ type StepResult struct {
 // awaits an external execution, starts a background continuation, acquires
 // ownership, or retains the caller's Writer after a method returns.
 type Driver struct {
-	Runs            *sessionstore.SessionRunStore
+	TurnStore       *sessionstore.SessionTurnStore
 	Loops           *Loops
 	Compactions     *Compactions
 	MissingEffects  reconcile.MissingPolicy
@@ -71,7 +70,7 @@ func (d *Driver) Step(ctx context.Context, w writer.Writer, turnID turn.TurnID) 
 			return StepResult{Disposition: Continue}, nil
 		}
 	}
-	surface, err := turn.ReadSurface(ctx, w.Projections(), w.SessionID())
+	surface, err := sessionstore.ReadSurface(ctx, w.Projections(), w.SessionID())
 	if err != nil {
 		return StepResult{}, err
 	}
@@ -86,8 +85,8 @@ func (d *Driver) Step(ctx context.Context, w writer.Writer, turnID turn.TurnID) 
 	if err != nil {
 		return StepResult{}, err
 	}
-	st := d.Runs.Bind(w)
-	snapshot, err := st.Load(ctx, view.RunID)
+	st := d.TurnStore.Bind(w)
+	snapshot, err := st.Load(ctx, view.TurnID)
 	if err != nil {
 		return StepResult{}, err
 	}
@@ -99,7 +98,7 @@ func (d *Driver) Step(ctx context.Context, w writer.Writer, turnID turn.TurnID) 
 			return lp.Redispatch(ctx, st, key)
 		}}
 	for _, target := range plan.RecoveryTargets(&snapshot.State) {
-		key := effect.AssignmentKey{Session: st.Scope(), RunID: view.RunID, Effect: target.Effect}
+		key := effect.AssignmentKey{Session: st.Scope(), OwnerKind: effect.OwnerTurn, OwnerID: string(view.TurnID), Effect: target.Effect}
 		decision, found, err := rec.ReconcileEffect(ctx, st, &snapshot, key)
 		if err != nil {
 			return StepResult{}, err
@@ -125,7 +124,7 @@ func (d *Driver) Step(ctx context.Context, w writer.Writer, turnID turn.TurnID) 
 		// next effect. The host's budget can now choose to continue or yield.
 		return StepResult{Disposition: Continue}, nil
 	}
-	res, err := lp.Advance(ctx, st, view.RunID, d.Sink)
+	res, err := lp.Advance(ctx, st, view.TurnID, d.Sink)
 	if err != nil {
 		if errors.Is(err, compaction.ErrPending) {
 			return StepResult{Disposition: Continue}, nil
@@ -147,11 +146,11 @@ func (d *Driver) Step(ctx context.Context, w writer.Writer, turnID turn.TurnID) 
 	}
 }
 
-// ReconcileExecution handles a discovered execution even after its Run left
+// ReconcileExecution handles a discovered execution even after its Turn left
 // the active projection. A durable domain disposition authorizes cancellation
 // of still-running work and later ACK; a lost Activation alone never does.
 func (d *Driver) ReconcileExecution(ctx context.Context, w writer.Writer, key effect.AssignmentKey) error {
-	if key.Session != run.Scope(w.SessionID()) {
+	if key.Session != turn.Scope(w.SessionID()) {
 		return errors.New("driver: execution belongs to another session")
 	}
 	if d.Compactions != nil {
@@ -167,16 +166,19 @@ func (d *Driver) ReconcileExecution(ctx context.Context, w writer.Writer, key ef
 			}
 		}
 	}
-	lp, _, err := d.Loops.ForRun(ctx, w, key.RunID)
+	if key.OwnerKind != effect.OwnerTurn {
+		return errors.New("driver: unknown execution owner")
+	}
+	lp, err := d.Loops.ForTurn(ctx, w, turn.TurnID(key.OwnerID))
 	if err != nil {
 		return err
 	}
-	st := d.Runs.Bind(w)
+	st := d.TurnStore.Bind(w)
 	proof, ok := st.(store.EffectDispositionReader)
 	if !ok {
 		return store.ErrEffectProofUnsupported
 	}
-	_, disposed, err := proof.EffectDisposition(ctx, key.RunID, key.Effect)
+	_, disposed, err := proof.EffectDisposition(ctx, turn.TurnID(key.OwnerID), key.Effect)
 	if err != nil {
 		return err
 	}
@@ -219,7 +221,7 @@ func (d *Driver) ReconcileExecution(ctx context.Context, w writer.Writer, key ef
 // Deliver admits one externally discovered Outcome under the current Writer.
 // A dropped result is not, by itself, proof that the Executor may collect it.
 func (d *Driver) Deliver(ctx context.Context, w writer.Writer, out effect.Outcome) (StepResult, error) {
-	if out.Key.Session != run.Scope(w.SessionID()) {
+	if out.Key.Session != turn.Scope(w.SessionID()) {
 		return StepResult{}, errors.New("driver: outcome belongs to another session")
 	}
 	if d.Compactions != nil {
@@ -235,11 +237,14 @@ func (d *Driver) Deliver(ctx context.Context, w writer.Writer, out effect.Outcom
 			}
 		}
 	}
-	lp, _, err := d.Loops.ForRun(ctx, w, out.Key.RunID)
+	if out.Key.OwnerKind != effect.OwnerTurn {
+		return StepResult{}, errors.New("driver: unknown outcome owner")
+	}
+	lp, err := d.Loops.ForTurn(ctx, w, turn.TurnID(out.Key.OwnerID))
 	if err != nil {
 		return StepResult{}, err
 	}
-	st := d.Runs.Bind(w)
+	st := d.TurnStore.Bind(w)
 	res, err := lp.Deliver(ctx, st, out, d.Sink)
 	if err != nil {
 		return StepResult{}, err

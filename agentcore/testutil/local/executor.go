@@ -12,12 +12,12 @@ import (
 	"sync"
 
 	"github.com/felinics/twilight/agentcore/executor/notice"
-	run "github.com/felinics/twilight/agentcore/run"
-	effect "github.com/felinics/twilight/agentcore/run/effect"
-	"github.com/felinics/twilight/agentcore/run/frozen"
-	"github.com/felinics/twilight/agentcore/run/model"
-	"github.com/felinics/twilight/agentcore/run/schema"
 	"github.com/felinics/twilight/agentcore/testutil/sdkconv"
+	turn "github.com/felinics/twilight/agentcore/turn"
+	effect "github.com/felinics/twilight/agentcore/turn/effect"
+	"github.com/felinics/twilight/agentcore/turn/frozen"
+	"github.com/felinics/twilight/agentcore/turn/model"
+	"github.com/felinics/twilight/agentcore/turn/schema"
 	"github.com/felinics/twilight/sdk"
 )
 
@@ -120,8 +120,7 @@ type LocalExecutor struct {
 const DefaultRetainedOutcomes = 1024
 
 type inflight struct {
-	runID   run.RunID
-	digest  run.Digest
+	digest  turn.Digest
 	cancel  context.CancelFunc
 	done    chan struct{}
 	outcome Outcome
@@ -200,53 +199,53 @@ func (e *LocalExecutor) evictLocked() {
 
 // Validate checks the tool definition and policy or resolves the ModelRef
 // in the catalog so invalid assignments fail before any start fact is written.
-func (e *LocalExecutor) Validate(_ context.Context, a Assignment) (*run.ToolFailure, error) {
+func (e *LocalExecutor) Validate(_ context.Context, a Assignment) (*turn.ToolFailure, error) {
 	switch body := a.Body.(type) {
 	case ModelAssignment:
 		invoker, err := e.models.ResolveModel(body.Model)
 		if err != nil {
-			return &run.ToolFailure{Class: run.FailureProvider, Message: err.Error()}, nil
+			return &turn.ToolFailure{Class: turn.FailureProvider, Message: err.Error()}, nil
 		}
 		if invoker == nil {
-			return &run.ToolFailure{Class: run.FailureProvider, Message: "model catalog returned a nil invoker"}, nil
+			return &turn.ToolFailure{Class: turn.FailureProvider, Message: "model catalog returned a nil invoker"}, nil
 		}
 		return nil, nil
 	case ToolAssignment:
 		_, failure := e.resolveTool(&body)
 		return failure, nil
 	default:
-		return &run.ToolFailure{Class: run.FailureProvider, Message: "assignment without body"}, nil
+		return &turn.ToolFailure{Class: turn.FailureProvider, Message: "assignment without body"}, nil
 	}
 }
 
-func (e *LocalExecutor) resolveTool(t *ToolAssignment) (ExecutableTool, *run.ToolFailure) {
+func (e *LocalExecutor) resolveTool(t *ToolAssignment) (ExecutableTool, *turn.ToolFailure) {
 	tool, resolveErr := e.tools.ResolveTool(t.ToolRef)
 	if resolveErr != nil {
-		return nil, &run.ToolFailure{Class: run.FailureToolLookup, Message: resolveErr.Error()}
+		return nil, &turn.ToolFailure{Class: turn.FailureToolLookup, Message: resolveErr.Error()}
 	}
 	if tool == nil {
-		return nil, &run.ToolFailure{Class: run.FailureToolLookup, Message: "tool catalog returned a nil tool"}
+		return nil, &turn.ToolFailure{Class: turn.FailureToolLookup, Message: "tool catalog returned a nil tool"}
 	}
 	toolDef, freezeErr := sdkconv.FreezeToolDefinition(tool.Definition())
 	if freezeErr != nil {
-		return nil, &run.ToolFailure{Class: run.FailureDefinitionMismatch, Message: freezeErr.Error()}
+		return nil, &turn.ToolFailure{Class: turn.FailureDefinitionMismatch, Message: freezeErr.Error()}
 	}
 	defDigest, digestErr := schema.Canonical().DigestToolDefinition(toolDef)
 	if digestErr != nil {
-		return nil, &run.ToolFailure{Class: run.FailureDefinitionMismatch, Message: digestErr.Error()}
+		return nil, &turn.ToolFailure{Class: turn.FailureDefinitionMismatch, Message: digestErr.Error()}
 	}
 	switch {
 	case tool.Ref() != t.ToolRef || defDigest != t.DefinitionDigest:
-		return nil, &run.ToolFailure{Class: run.FailureDefinitionMismatch, Message: "tool definition digest mismatch"}
+		return nil, &turn.ToolFailure{Class: turn.FailureDefinitionMismatch, Message: "tool definition digest mismatch"}
 	case tool.ResponsePolicy() != t.Policy:
-		return nil, &run.ToolFailure{Class: run.FailureDefinitionMismatch, Message: "response policy mismatch"}
+		return nil, &turn.ToolFailure{Class: turn.FailureDefinitionMismatch, Message: "response policy mismatch"}
 	case tool.Replay() != t.Replay:
-		return nil, &run.ToolFailure{Class: run.FailureDefinitionMismatch, Message: "replay policy mismatch"}
+		return nil, &turn.ToolFailure{Class: turn.FailureDefinitionMismatch, Message: "replay policy mismatch"}
 	case tool.Placement() != t.Placement:
-		return nil, &run.ToolFailure{Class: run.FailureDefinitionMismatch, Message: "placement mismatch"}
+		return nil, &turn.ToolFailure{Class: turn.FailureDefinitionMismatch, Message: "placement mismatch"}
 	}
 	if argErr := tool.ValidateArguments(t.Arguments); argErr != nil {
-		return nil, &run.ToolFailure{Class: run.FailureInvalidArguments, Message: argErr.Error()}
+		return nil, &turn.ToolFailure{Class: turn.FailureInvalidArguments, Message: argErr.Error()}
 	}
 	return tool, nil
 }
@@ -312,7 +311,7 @@ func (e *LocalExecutor) Start(ctx context.Context, ref string, a Assignment) err
 	}
 
 	effectCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	entry := &inflight{runID: a.RunID, digest: digest, cancel: cancel, done: make(chan struct{})}
+	entry := &inflight{digest: digest, cancel: cancel, done: make(chan struct{})}
 	e.mu.Lock()
 	if existing, dup := e.inflight[key]; dup {
 		e.mu.Unlock()
@@ -519,7 +518,7 @@ func (e *LocalExecutor) invokeModel(ctx context.Context, invoker ModelInvoker, r
 
 func (e *LocalExecutor) runTool(ctx context.Context, a Assignment, t ToolAssignment, tool ExecutableTool) Outcome {
 	req := ToolExecutionRequest{
-		RunID:            a.RunID,
+		TurnID:           turn.TurnID(a.OwnerID),
 		StepID:           a.StepID,
 		CallID:           a.CallID,
 		Effect:           a.Effect,
@@ -532,7 +531,7 @@ func (e *LocalExecutor) runTool(ctx context.Context, a Assignment, t ToolAssignm
 	return Outcome{Result: executeToolSafely(ctx, tool, &req)}
 }
 
-func cloneTarget(target *run.TargetRef) *run.TargetRef {
+func cloneTarget(target *turn.TargetRef) *turn.TargetRef {
 	if target == nil {
 		return nil
 	}
@@ -546,11 +545,13 @@ func cloneTarget(target *run.TargetRef) *run.TargetRef {
 func executeToolSafely(ctx context.Context, tool ExecutableTool, req *ToolExecutionRequest) (outcome ToolExecutionOutcome) {
 	defer func() {
 		if r := recover(); r != nil {
-			outcome = ToolExecutionUnknown{Failure: run.ToolFailure{
-				Class:   run.FailureEffectUnknown,
+			outcome = ToolExecutionUnknown{Failure: turn.ToolFailure{
+				Class:   turn.FailureEffectUnknown,
 				Message: fmt.Sprintf("tool panic: %v", r),
 			}}
 		}
 	}()
 	return tool.Execute(ctx, *req)
 }
+
+const OwnerTurn = effect.OwnerTurn

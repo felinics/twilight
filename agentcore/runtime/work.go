@@ -6,11 +6,11 @@ import (
 
 	"github.com/felinics/twilight/agentcore/chatlog"
 	"github.com/felinics/twilight/agentcore/compaction"
-	"github.com/felinics/twilight/agentcore/run"
-	"github.com/felinics/twilight/agentcore/run/effect"
-	"github.com/felinics/twilight/agentcore/run/plan"
-	"github.com/felinics/twilight/agentcore/run/sessionstore"
 	"github.com/felinics/twilight/agentcore/session"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/effect"
+	"github.com/felinics/twilight/agentcore/turn/plan"
+	"github.com/felinics/twilight/agentcore/turn/sessionstore"
 )
 
 // Work is a reconstructible read model, not an Activation's durable state.
@@ -22,7 +22,7 @@ type Work struct {
 	Ready      bool
 	Pending    bool
 	Executions []effect.AssignmentKey
-	Responses  []run.ResponseRequest
+	Responses  []turn.ResponseRequest
 }
 
 // Inspect uses lease-free reads. Projections can be read at different heads:
@@ -59,10 +59,10 @@ func Inspect(ctx context.Context, reader session.ProjectionReader, sid session.S
 			work.Ready = true
 		}
 		for _, target := range plan.RecoveryTargets(&state) {
-			work.Executions = append(work.Executions, effect.AssignmentKey{Session: run.Scope(sid), RunID: id, Effect: target.Effect})
+			work.Executions = append(work.Executions, effect.AssignmentKey{Session: turn.Scope(sid), OwnerKind: effect.OwnerTurn, OwnerID: string(id), Effect: target.Effect})
 			work.Pending = true
 		}
-		work.Responses = append(work.Responses, run.WaitingCalls(state)...)
+		work.Responses = append(work.Responses, turn.WaitingCalls(state)...)
 	}
 	value, head, err = reader.Load(ctx, sid, compaction.ProjectionID, compaction.Projection.Version)
 	if err != nil {

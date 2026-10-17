@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/felinics/twilight/agentcore/jsonstable"
-	"github.com/felinics/twilight/agentcore/run/model"
+	"github.com/felinics/twilight/agentcore/turn/model"
 	"github.com/felinics/twilight/sdk"
 	"github.com/google/jsonschema-go/jsonschema"
 )

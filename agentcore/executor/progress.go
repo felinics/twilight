@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/felinics/twilight/agentcore/run/effect"
+	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
 // DefaultProgressWindow is the frames a ProgressHub keeps per key when

@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"github.com/felinics/twilight/agentcore/jsonstable"
 	"github.com/felinics/twilight/agentcore/ledger"
-	"github.com/felinics/twilight/agentcore/run"
 	"github.com/felinics/twilight/agentcore/session"
 	"github.com/felinics/twilight/agentcore/session/unit"
 	"github.com/felinics/twilight/agentcore/session/writer"
+	"github.com/felinics/twilight/agentcore/turn"
 	"strings"
 	"time"
 )
@@ -36,13 +36,13 @@ var ErrNotSubmitted = errors.New("chatlog: input is not submitted")
 // Submit records one user input as submitted: content is the
 // input's body, opaque to this module and digested as given (the agent decides its shape). Idempotency rides on the CommitID, so a
 // retried submission replays.
-func (s *Commands) Submit(ctx context.Context, w writer.Writer, id run.InputID, content run.CanonicalJSON) (run.AgentInput, error) {
+func (s *Commands) Submit(ctx context.Context, w writer.Writer, id turn.InputID, content turn.CanonicalJSON) (turn.AgentInput, error) {
 	if content.IsZero() {
-		return run.AgentInput{}, errors.New("chatlog: submit requires input content")
+		return turn.AgentInput{}, errors.New("chatlog: submit requires input content")
 	}
 	digest, err := DigestInput(InputID(id), content)
 	if err != nil {
-		return run.AgentInput{}, err
+		return turn.AgentInput{}, err
 	}
 	res, err := w.Commit(ctx, func(writer.View) (*writer.SemanticGroup, error) {
 		return &writer.SemanticGroup{CommitID: ledger.CommitID("input-submitted/" + string(id)),
@@ -52,20 +52,20 @@ func (s *Commands) Submit(ctx context.Context, w writer.Writer, id run.InputID, 
 			}}}}}, nil
 	})
 	if err != nil {
-		return run.AgentInput{}, err
+		return turn.AgentInput{}, err
 	}
 	switch res.Outcome {
 	case writer.CommitApplied, writer.CommitAlreadyApplied:
-		return run.AgentInput{ID: id, Digest: digest}, nil
+		return turn.AgentInput{ID: id, Digest: digest}, nil
 	default:
-		return run.AgentInput{}, fmt.Errorf("chatlog: submit input: %s: %s", res.Outcome, res.Detail)
+		return turn.AgentInput{}, fmt.Errorf("chatlog: submit input: %s: %s", res.Outcome, res.Detail)
 	}
 }
 
 // Withdraw marks a submitted, undelivered input as withdrawn
 // for example the original input of a Turn the caller forked
 // before in order to edit it.
-func (s *Commands) Withdraw(ctx context.Context, w writer.Writer, id run.InputID, reason string) error {
+func (s *Commands) Withdraw(ctx context.Context, w writer.Writer, id turn.InputID, reason string) error {
 	res, err := w.Commit(ctx, func(v writer.View) (*writer.SemanticGroup, error) {
 		state, err := v.Projection(SurfaceProjectionID, SurfaceProjection.Version)
 		if err != nil {
@@ -218,27 +218,13 @@ func CheckRetainClosure(entries []Entry, retain []EntryDigestPair) error {
 	return nil
 }
 
-// DeliverInputs is the chatlog's Part of a Turn's start or delivery unit
-// it checks, on the unit's own View, that every input
-// is a submitted chatlog Input whose content digest is the one the Run
-// accepts, and writes one input_delivered per input. The body stays here;
-// the Run carries only the digest. A failed check is
-// ErrNotSubmitted and refuses the whole unit, so an input withdrawn between
-// the caller's read and the commit is caught inside the critical section.
-func DeliverInputs(turnID TurnID, runID run.RunID, inputs []run.AgentInput) unit.Part {
-	return deliverInputs{turnID: turnID, runID: runID, inputs: inputs}
-}
+// AdmitInputs validates submitted bodies on the same writer view as acceptance.
+// InputAccepted is the sole durable fact that admits input to a Turn.
+func AdmitInputs(inputs []turn.AgentInput) unit.Part { return admitInputs{inputs: inputs} }
 
-type deliverInputs struct {
-	turnID TurnID
-	runID  run.RunID
-	inputs []run.AgentInput
-}
+type admitInputs struct{ inputs []turn.AgentInput }
 
-func (d deliverInputs) Prepare(_ context.Context, view writer.View, now int64) ([]writer.TypedBatch, error) {
-	if len(d.inputs) == 0 {
-		return nil, nil
-	}
+func (d admitInputs) Prepare(_ context.Context, view writer.View, _ int64) ([]writer.TypedBatch, error) {
 	state, err := view.Projection(SurfaceProjectionID, SurfaceProjection.Version)
 	if err != nil {
 		return nil, err
@@ -247,17 +233,13 @@ func (d deliverInputs) Prepare(_ context.Context, view writer.View, now int64) (
 	if !ok {
 		return nil, fmt.Errorf("chatlog: surface projection is %T", state)
 	}
-	events := make([]writer.TypedEvent, 0, len(d.inputs))
+	seen := map[turn.InputID]bool{}
 	for _, in := range d.inputs {
 		v, ok := surface.Inputs.Get(InputID(in.ID))
-		if !ok || v.Status != InputSubmitted {
-			return nil, fmt.Errorf("%w: input %s is not a submitted input", ErrNotSubmitted, in.ID)
+		if in.ID == "" || seen[in.ID] || !ok || v.Status != InputSubmitted || v.Input.Digest != in.Digest {
+			return nil, fmt.Errorf("%w: input %s is duplicate, unavailable or has different content", ErrNotSubmitted, in.ID)
 		}
-		if v.Input.Digest != in.Digest {
-			return nil, fmt.Errorf("%w: input %s digest differs from its submitted content", ErrNotSubmitted, in.ID)
-		}
-		events = append(events, writer.TypedEvent{Type: TypeInputDelivered, RecordedAtUnixMilli: now,
-			Value: InputDeliveredPayload{InputID: InputID(in.ID), TurnID: d.turnID, RunID: d.runID}})
+		seen[in.ID] = true
 	}
-	return []writer.TypedBatch{{Domain: Stream, Events: events}}, nil
+	return nil, nil
 }
