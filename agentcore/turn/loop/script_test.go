@@ -1,0 +1,152 @@
+package loop_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+
+	"github.com/felinics/twilight/agentcore/prompt"
+	"github.com/felinics/twilight/agentcore/testutil/local"
+	"github.com/felinics/twilight/agentcore/testutil/sdkconv"
+	"github.com/felinics/twilight/agentcore/turn"
+	"github.com/felinics/twilight/agentcore/turn/loop"
+	"github.com/felinics/twilight/sdk"
+)
+
+// Text is a model result that completes without tool calls.
+func Text(text string) sdk.ModelResult {
+	return sdk.ModelResult{Text: text, FinishReason: sdk.FinishReasonStop, Usage: sdk.Usage{TotalTokens: 1}}
+}
+
+// Call is one scripted tool call with the default arguments.
+func Call(name, id string) sdk.ToolCall {
+	return sdk.ToolCall{ToolCallID: id, ToolName: name, Input: sdk.ParseToolArguments(`{"x":1}`)}
+}
+
+// Calls is a model result that opens the given tool calls.
+func Calls(calls ...sdk.ToolCall) sdk.ModelResult {
+	return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, Usage: sdk.Usage{TotalTokens: 2}, ToolCalls: calls}
+}
+
+// ToolCalls is a model result that opens the named tool for each call ID.
+func ToolCalls(name string, ids ...string) sdk.ModelResult {
+	calls := make([]sdk.ToolCall, len(ids))
+	for i, id := range ids {
+		calls[i] = Call(name, id)
+	}
+	return Calls(calls...)
+}
+
+type scriptInvoker struct {
+	results []sdk.ModelResult
+	calls   atomic.Int32
+	mu      sync.Mutex
+	last    *sdk.ModelResult // most recent result handed to the Loop
+}
+
+func (s *scriptInvoker) Generate(ctx context.Context, _ sdk.Request) (sdk.ModelResult, error) {
+	if err := ctx.Err(); err != nil {
+		return sdk.ModelResult{}, err
+	}
+	n := int(s.calls.Add(1)) - 1
+	if n >= len(s.results) {
+		return sdk.ModelResult{}, errors.New("feature: no scripted model result")
+	}
+	res := s.results[n]
+	s.mu.Lock()
+	s.last = &res
+	s.mu.Unlock()
+	return res, nil
+}
+
+func (s *scriptInvoker) lastResult() (sdk.ModelResult, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.last == nil {
+		return sdk.ModelResult{}, false
+	}
+	return *s.last, true
+}
+
+type scriptCatalog struct {
+	invoker local.ModelInvoker
+	err     error
+}
+
+func (c scriptCatalog) ResolveModel(turn.ModelRef) (local.ModelInvoker, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	return c.invoker, nil
+}
+
+type scriptTool struct {
+	ref     turn.ToolRef
+	def     sdk.ToolDefinition
+	policy  turn.ResponsePolicy
+	unknown bool
+	fail    string
+	ran     atomic.Int32
+}
+
+func (s *scriptTool) Ref() turn.ToolRef                   { return s.ref }
+func (s *scriptTool) Definition() sdk.ToolDefinition      { return s.def }
+func (s *scriptTool) ResponsePolicy() turn.ResponsePolicy { return s.policy }
+func (s *scriptTool) Replay() turn.ReplayPolicy           { return turn.ReplayUnknown }
+func (s *scriptTool) Placement() turn.ToolPlacement       { return turn.PlacementProcess }
+func (s *scriptTool) ValidateArguments(turn.CanonicalJSON) error {
+	return nil
+}
+
+func (s *scriptTool) Execute(_ context.Context, req local.ToolExecutionRequest) loop.ToolExecutionOutcome {
+	s.ran.Add(1)
+	if s.unknown {
+		return loop.ToolExecutionUnknown{Failure: turn.ToolFailure{Class: turn.FailureEffectUnknown, Message: "lost"}}
+	}
+	if s.fail != "" {
+		return loop.ToolExecutionFailed{Failure: turn.ToolFailure{Class: s.fail, Message: "boom"}}
+	}
+	return loop.ToolExecutionSucceeded{Result: turn.ToolExecutionResult{Output: req.Arguments}}
+}
+
+type scriptToolCatalog struct {
+	tools map[turn.ToolRef]local.ExecutableTool
+}
+
+func (c scriptToolCatalog) ResolveTool(ref turn.ToolRef) (local.ExecutableTool, error) {
+	tool, ok := c.tools[ref]
+	if !ok {
+		return nil, fmt.Errorf("unknown tool %q", ref)
+	}
+	return tool, nil
+}
+
+type scriptBuilder struct {
+	model    turn.ModelRef
+	specs    []turn.ToolSpec
+	defs     map[turn.ToolRef]sdk.ToolDefinition
+	lastHint prompt.Input
+}
+
+func (p *scriptBuilder) Build(_ context.Context, hint prompt.Input) (prompt.Prompt, error) {
+	p.lastHint = hint
+	model := p.model
+	if model == "" {
+		model = defaultModel
+	}
+	req := sdk.Request{Model: string(model), Messages: []sdk.Message{sdk.UserMessage("go")}}
+	for _, spec := range p.specs {
+		req.Tools = append(req.Tools, p.defs[spec.Ref])
+	}
+	ids := make([]turn.InputID, len(hint.Inputs))
+	for i, in := range hint.Inputs {
+		ids[i] = in.ID
+	}
+	frozen, err := sdkconv.FreezeModelRequest(req)
+	if err != nil {
+		return prompt.Prompt{}, err
+	}
+	return prompt.Prompt{Model: model, Request: frozen, InputIDs: ids, Tools: p.specs}, nil
+}
