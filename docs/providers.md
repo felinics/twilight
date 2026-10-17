@@ -251,8 +251,12 @@ Only the configured field is sent. `reasoning_details` is the only form that
 carries signatures and encrypted reasoning, so it is what OpenRouter needs to
 continue a hosted model's reasoning across tool calls. The provider keeps the
 array a response or stream returned on the step's `ReasoningPart`, under the
-`openai-chat` metadata namespace, merging streamed pieces by `index` with every
-field kept. A step without preserved details sends no `reasoning_details`.
+`openai-chat` metadata namespace, with every field kept. Streamed pieces are
+merged in wire order: adjacent text or summary pieces of the same type form one
+entry, and every other piece stays its own. A piece that arrives after the
+answer text or a tool call, such as Gemini's thought signature for its answer,
+still joins the step's reasoning. A step without preserved details sends no
+`reasoning_details`.
 
 In thinking mode, DeepSeek validates replayed history when the request carries
 tools: every assistant message with `tool_calls` must carry a
