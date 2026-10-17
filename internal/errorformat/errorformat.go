@@ -33,19 +33,28 @@ func (o *openAIError) copyTo(e *sdk.APIError) {
 // openAIBody is OpenAI's error body:
 // {"error":{"message":"...","type":"...","param":null,"code":"..."}}.
 // A Responses API response that failed carries the same error object in a 2xx
-// body.
+// body. When a request made with a ChatGPT account's token (Sign in with
+// ChatGPT) fails admission, before any model runs, OpenAI's API answers 400
+// with no error object, only detail:
+// {"detail":"Unsupported parameter: temperature"}.
 type openAIBody struct {
-	Error openAIError `json:"error"`
+	Error  openAIError     `json:"error"`
+	Detail json.RawMessage `json:"detail"`
 }
 
 // ParseOpenAI copies type, code and message from an OpenAI-format body into
-// e. A numeric code is copied as its decimal text.
+// e. A numeric code is copied as its decimal text. A body whose error object
+// has no message but that has a detail member gets detail as the message: a
+// string as is, any other JSON value as its compact text.
 func ParseOpenAI(e *sdk.APIError) {
 	var body openAIBody
 	if json.Unmarshal(e.Body, &body) != nil {
 		return
 	}
 	body.Error.copyTo(e)
+	if e.Message == "" {
+		e.Message = jsonText(body.Detail)
+	}
 }
 
 // openAIErrorEvent is the Responses API's "error" stream event. The API
@@ -102,7 +111,9 @@ func ParseOpenAIFailedEvent(e *sdk.APIError) {
 
 // DecodeOpenAI is the error decoder for OpenAI's API and the OpenAI-compatible
 // endpoints the OpenAI-format packages are pointed at. The request ID comes
-// from x-request-id, or from x-amzn-requestid on Amazon Bedrock.
+// from x-request-id; from x-oai-request-id, which OpenAI's API sends instead
+// to a ChatGPT account's token (Sign in with ChatGPT); or from
+// x-amzn-requestid on Amazon Bedrock.
 func DecodeOpenAI(e *sdk.APIError) {
 	ParseOpenAI(e)
 	classifyOpenAI(e)
@@ -124,7 +135,7 @@ func DecodeOpenAIFailedEvent(e *sdk.APIError) {
 // classifyOpenAI sets the request ID and, when OpenAI's type or code
 // identifies one, the Kind of an APIError whose type and code are parsed.
 func classifyOpenAI(e *sdk.APIError) {
-	e.RequestID = cmp.Or(e.Header.Get("x-request-id"), e.Header.Get("x-amzn-requestid"))
+	e.RequestID = cmp.Or(e.Header.Get("x-request-id"), e.Header.Get("x-oai-request-id"), e.Header.Get("x-amzn-requestid"))
 	if k := OpenAIKind(e.Type, e.Code); k != sdk.KindUnknown {
 		e.Kind = k
 	}
@@ -272,6 +283,27 @@ func scalarString(raw json.RawMessage) string {
 		}
 	}
 	return ""
+}
+
+// jsonText returns a JSON string's value, the compact text of any other JSON
+// value, and "" for null or nothing.
+func jsonText(raw json.RawMessage) string {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return ""
+	}
+	if raw[0] == '"' {
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			return s
+		}
+		return ""
+	}
+	var b bytes.Buffer
+	if json.Compact(&b, raw) != nil {
+		return ""
+	}
+	return b.String()
 }
 
 // openRouterBody is the part of OpenRouter's error body that OpenAI's format
