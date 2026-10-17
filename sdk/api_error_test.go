@@ -79,6 +79,21 @@ func TestAPIErrorErrorText(t *testing.T) {
 			want: "anthropic-messages: error overloaded_error: Overloaded",
 		},
 		{
+			name: "code repeating the status is written once",
+			err:  &sdk.APIError{Provider: "openai-completions", StatusCode: 422, Code: "422", Message: "Provider returned error"},
+			want: "openai-completions: 422: Provider returned error",
+		},
+		{
+			name: "numeric code other than the status",
+			err:  &sdk.APIError{Provider: "openai-completions", StatusCode: 400, Code: "422", Message: "bad"},
+			want: "openai-completions: 400 422: bad",
+		},
+		{
+			name: "numeric code without status",
+			err:  &sdk.APIError{Provider: "openai-responses", Code: "502", Message: "boom"},
+			want: "openai-responses: error 502: boom",
+		},
+		{
 			name: "status only",
 			err:  &sdk.APIError{StatusCode: 502},
 			want: "502",

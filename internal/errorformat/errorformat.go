@@ -102,15 +102,19 @@ func ParseOpenAIFailedEvent(e *sdk.APIError) {
 
 // DecodeOpenAI is the error decoder for OpenAI's API and the OpenAI-compatible
 // endpoints the OpenAI-format packages are pointed at. The request ID comes
-// from x-request-id, or from x-amzn-requestid on Amazon Bedrock.
+// from x-request-id, or from x-amzn-requestid on Amazon Bedrock. When the
+// endpoint is OpenRouter's, the upstream provider's failure it relays is
+// appended to the message, see AddOpenRouterUpstream.
 func DecodeOpenAI(e *sdk.APIError) {
 	ParseOpenAI(e)
+	AddOpenRouterUpstream(e)
 	classifyOpenAI(e)
 }
 
 // DecodeOpenAIErrorEvent is DecodeOpenAI for a Responses "error" stream event.
 func DecodeOpenAIErrorEvent(e *sdk.APIError) {
 	ParseOpenAIErrorEvent(e)
+	AddOpenRouterUpstream(e)
 	classifyOpenAI(e)
 }
 
@@ -290,8 +294,11 @@ type openRouterBody struct {
 // field to classify by. RequestID is the x-generation-id response header,
 // which OpenRouter sends on chat completion errors and lists in
 // Access-Control-Expose-Headers; its API reference does not describe it.
+// The upstream provider's failure OpenRouter relays is appended to the
+// message, see AddOpenRouterUpstream.
 func DecodeOpenRouter(e *sdk.APIError) {
 	ParseOpenAI(e)
+	AddOpenRouterUpstream(e)
 	e.RequestID = e.Header.Get("x-generation-id")
 	var body openRouterBody
 	if json.Unmarshal(e.Body, &body) == nil && body.Error.Metadata.ErrorType != "" {

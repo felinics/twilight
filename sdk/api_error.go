@@ -44,6 +44,9 @@ type APIError struct {
 	Code string
 
 	// Message is the provider's human-readable message, copied verbatim.
+	// When OpenRouter relays the failure of an upstream provider, the
+	// upstream provider's name and the start of its message follow in
+	// parentheses, e.g. "Provider returned error (DeepInfra: ...)".
 	Message string
 
 	// RequestID is the provider's identifier for the failed request, when the
@@ -66,8 +69,8 @@ type APIError struct {
 }
 
 // Error describes the failure with the provider, the HTTP status, the
-// provider's type and code, its message and the request ID. It never includes
-// Body or any header.
+// provider's type and code, its message and the request ID. A code that only
+// repeats the HTTP status is left out. It never includes Body or any header.
 func (e *APIError) Error() string {
 	var b strings.Builder
 	if e.Provider != "" {
@@ -83,7 +86,9 @@ func (e *APIError) Error() string {
 		b.WriteString(" ")
 		b.WriteString(e.Type)
 	}
-	if e.Code != "" && e.Code != e.Type {
+	// OpenAI-compatible APIs such as OpenRouter repeat the HTTP status as a
+	// numeric code; it is written once.
+	if e.Code != "" && e.Code != e.Type && (e.StatusCode == 0 || e.Code != strconv.Itoa(e.StatusCode)) {
 		b.WriteString(" ")
 		b.WriteString(e.Code)
 	}
