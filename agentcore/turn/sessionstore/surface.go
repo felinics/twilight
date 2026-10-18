@@ -52,11 +52,11 @@ func (s *TurnSurface) Active() (TurnView, bool) {
 // History inherits facts; execution's MachineProjection explicitly does not.
 var SurfaceProjection = module.ProjectionDefinition{
 	ID: SurfaceProjectionID, Version: 1,
-	Consumes: []ledger.EventType{TypeStarted, Prefix + "input_accepted", Prefix + "turn_ended"},
-	Inherits: module.InheritAll, RequiredForCommit: true,
-	Initial:    func() (any, error) { return TurnSurface{Turns: map[turn.TurnID]TurnView{}}, nil },
-	StateCodec: module.JSONStateCodec[TurnSurface]{},
-	Apply:      applySurface,
+	Consumes:          []ledger.EventType{TypeStarted, Prefix + "input_accepted", Prefix + "turn_ended"},
+	RequiredForCommit: true,
+	Initial:           func() (any, error) { return TurnSurface{Turns: map[turn.TurnID]TurnView{}}, nil },
+	StateCodec:        module.JSONStateCodec[TurnSurface]{},
+	Apply:             applySurface,
 }
 
 func applySurface(state any, e module.DecodedEvent) (any, error) {

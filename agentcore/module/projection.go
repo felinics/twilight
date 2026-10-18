@@ -18,15 +18,11 @@ type ProjectionDefinition struct {
 	Initial    func() (any, error)
 	Apply      func(any, DecodedEvent) (any, error)
 	StateCodec PayloadCodec
-	// Inherits decides, per logical stream, what the fold takes from the
-	// commits a fork inherits. nil follows the lineage each
-	// stream's domain declared: inherited batches of Inherited domains
-	// are folded and those of Own domains are skipped, so a
-	// child never interprets its parent's execution history as its own. A
-	// projection whose content lives in another module's segment-lineage
-	// facts declares InheritAll, or names the domains it takes with
-	// InheritStreams.
-	Inherits InheritPolicy
+	// InheritanceOverride decides which batches from an inherited prefix this
+	// projection folds. A nil override follows the owning stream domain's
+	// Inheritance declaration. InheritAll and InheritNone override it for every
+	// domain.
+	InheritanceOverride InheritancePolicy
 	// RequiredForCommit marks a projection whose fold must accept a
 	// provisional commit before anything is persisted. Replay failures also
 	// prevent the Writer from opening. Only trusted core modules may set it.
@@ -37,31 +33,22 @@ type ProjectionDefinition struct {
 	RequiredForCommit bool
 }
 
-// InheritPolicy decides whether a projection folds the batches of one
-// logical stream from a fork's inherited prefix.
-type InheritPolicy func(ledger.Domain) bool
+// InheritancePolicy selects how a projection reads an inherited prefix for a
+// particular stream domain. A nil policy means the domain's declaration is
+// used instead.
+type InheritancePolicy func(ledger.Domain) bool
 
 // InheritAll folds every batch of inherited commits.
 func InheritAll(ledger.Domain) bool { return true }
 
-// InheritStreams folds the listed stream domains of inherited commits.
-func InheritStreams(domains ...string) InheritPolicy {
-	return func(stream ledger.Domain) bool {
-		for _, d := range domains {
-			if stream.Name == d {
-				return true
-			}
-		}
-		return false
-	}
-}
+// InheritNone skips every batch of inherited commits.
+func InheritNone(ledger.Domain) bool { return false }
 
-// inherits applies the definition's policy; nil follows the lineage the
-// stream's domain declared, and a domain no module declared is not
-// inherited.
+// inherits applies the projection policy. A missing policy follows the
+// inheritance declared by the stream's owning module.
 func (r *Registry) inherits(d *ProjectionDefinition, stream ledger.Domain) bool {
-	if d.Inherits != nil {
-		return d.Inherits(stream)
+	if d.InheritanceOverride != nil {
+		return d.InheritanceOverride(stream)
 	}
 	_, def, ok := r.LookupStream(stream.Name)
 	return ok && def.Inheritance == Inherited

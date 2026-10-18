@@ -153,8 +153,8 @@ func (machineCodec) Decode(wr jsonstable.Value) (any, error) {
 var MachineProjection = module.ProjectionDefinition{
 	ID: MachineProjectionID, Version: 1,
 	Consumes: AllTypes(), RequiredForCommit: true,
-	Inherits: func(ledger.Domain) bool { return false },
-	Initial:  func() (any, error) { return newMachine(), nil },
+	InheritanceOverride: module.InheritNone,
+	Initial:             func() (any, error) { return newMachine(), nil },
 	Apply: func(state any, e module.DecodedEvent) (any, error) {
 		m, ok := state.(Machine)
 		if !ok {
