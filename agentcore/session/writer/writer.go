@@ -298,11 +298,11 @@ func (w *sessionWriter) Commit(ctx context.Context, fn CommitFn) (CommitResult, 
 		// same operation and is not written again.
 		return CommitResult{Outcome: CommitAlreadyApplied, Commit: existing}, nil
 	}
-	// Projections must accept the commit before anything is persisted. The
+	// Required projections must accept the commit before anything is persisted. The
 	// provisional commit is what a reader folds: the kernel assigns only Seq
 	// inside Append.
 	provisional := ledger.Proposal{CommitID: group.CommitID, Batches: batches}.At(w.kernel.Head().Next)
-	// Only an authoritative projection's fold refuses the commit; a derived
+	// Only a required-for-commit projection's fold refuses the commit; a derived
 	// one that cannot fold is marked unhealthy once the commit lands.
 	next, err := w.projections.fold(provisional)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
 	"github.com/felinics/twilight/agentcore/ledger"
 
 	"github.com/felinics/twilight/agentcore/jsonstable"
@@ -26,14 +27,14 @@ type ProjectionDefinition struct {
 	// facts declares InheritAll, or names the domains it takes with
 	// InheritStreams.
 	Inherits InheritPolicy
-	// Authoritative marks a projection a module guards its stream's
-	// invariants with: a provisional commit its fold cannot fold is refused
-	// before anything is persisted. Every other projection is a derived read
-	// model: a fold failure marks it unhealthy for the Writer's lifetime and
-	// never blocks the facts. Write-time invariants belong to
-	// the Writer's decision, not to projections; an authoritative fold
+	// RequiredForCommit marks a projection whose fold must accept a
+	// provisional commit before anything is persisted. Replay failures also
+	// prevent the Writer from opening. Only trusted core modules may set it.
+	// Every other projection is a derived read model: a fold failure marks it
+	// Writer's lifetime and never blocks the facts. Write-time invariants
+	// belong to the Writer's decision, not to projections; a required fold
 	// failing is a defect, not a business rejection.
-	Authoritative bool
+	RequiredForCommit bool
 }
 
 // InheritPolicy decides whether a projection folds the batches of one
@@ -167,29 +168,29 @@ func (r *Registry) applyEvent(s *ProjectionScope, state any, pos ledger.Position
 	return next, nil
 }
 
-// checkpointDomain namespaces the digest of an authoritative checkpoint.
+// checkpointDomain namespaces the digest of a required-for-commit checkpoint.
 const checkpointDomain = "twilight/projection-checkpoint"
 
-// sealedCheckpoint is the cache Value of an authoritative projection: the
+// sealedCheckpoint is the cache Value of a required-for-commit projection: the
 // encoded state and a digest over (projection, version, through, state).
 type sealedCheckpoint struct {
 	State  json.RawMessage   `json:"state"`
 	Digest jsonstable.Digest `json:"digest"`
 }
 
-// checkpointDigest is the digest an authoritative entry must carry.
+// checkpointDigest is the digest a required-for-commit entry must carry.
 func checkpointDigest(id ProjectionID, v ProjectionVersion, through ledger.Head, state jsonstable.Value) jsonstable.Digest {
 	preimage, _ := jsonstable.EncodeTypedPayload(1, checkpointDomain, []string{string(id), fmt.Sprint(uint64(v)), fmt.Sprint(uint64(through.Next)), string(state.Bytes())})
 	return jsonstable.DigestBytes(preimage)
 }
 
-// SealCheckpoint wraps an authoritative projection's encoded state with its
+// SealCheckpoint wraps a required-for-commit projection's encoded state with its
 // digest for the cache.
 func SealCheckpoint(id ProjectionID, v ProjectionVersion, through ledger.Head, state jsonstable.Value) (jsonstable.Value, error) {
 	return jsonstable.FromValue(sealedCheckpoint{State: state.Bytes(), Digest: checkpointDigest(id, v, through, state)})
 }
 
-// OpenCheckpoint unwraps a sealed authoritative entry, verifying its digest;
+// OpenCheckpoint unwraps a sealed required-for-commit entry, verifying its digest;
 // ok is false when the entry is not a checkpoint of this projection at
 // through, and the caller treats it as absent.
 func OpenCheckpoint(id ProjectionID, v ProjectionVersion, through ledger.Head, sealed jsonstable.Value) (jsonstable.Value, bool) {

@@ -55,7 +55,7 @@ func noteModule(id module.ModuleID, requires ...module.ModuleRequirement) module
 			{Type: tpfx(id) + "hint", Domain: noteDomain, Codecs: map[module.PayloadVersion]module.PayloadCodec{1: module.JSONCodec[notePayload]{}}, Ignorable: true},
 		},
 		Projections: []module.ProjectionDefinition{{
-			ID: module.ProjectionID(string(typ) + "s"), Version: 1, Consumes: []ledger.EventType{typ}, Authoritative: true,
+			ID: module.ProjectionID(string(typ) + "s"), Version: 1, Consumes: []ledger.EventType{typ}, RequiredForCommit: true,
 			Initial: func() (any, error) { return noteState{}, nil },
 			Apply: func(state any, e module.DecodedEvent) (any, error) {
 				s := state.(noteState)

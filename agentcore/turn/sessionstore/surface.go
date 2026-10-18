@@ -53,7 +53,7 @@ func (s *TurnSurface) Active() (TurnView, bool) {
 var SurfaceProjection = module.ProjectionDefinition{
 	ID: SurfaceProjectionID, Version: 1,
 	Consumes: []ledger.EventType{TypeStarted, Prefix + "input_accepted", Prefix + "turn_ended"},
-	Inherits: module.InheritAll, Authoritative: true,
+	Inherits: module.InheritAll, RequiredForCommit: true,
 	Initial:    func() (any, error) { return TurnSurface{Turns: map[turn.TurnID]TurnView{}}, nil },
 	StateCodec: module.JSONStateCodec[TurnSurface]{},
 	Apply:      applySurface,

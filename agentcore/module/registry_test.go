@@ -275,25 +275,25 @@ func TestRegistryMultiVersionCodecsCoexist(t *testing.T) {
 	}
 }
 
-// Authoritative is a capability of trusted core modules. An
+// RequiredForCommit is a capability of trusted core modules. An
 // extension cannot declare it, nor claim the first-party source to get it.
-func TestExtensionsCannotBeAuthoritative(t *testing.T) {
+func TestExtensionsCannotDeclareRequiredForCommit(t *testing.T) {
 	core := ModuleDescriptor{Source: SourceTwilight, ID: "core", Projections: []ProjectionDefinition{{
-		ID: "twilight/core/p", Version: 1, Authoritative: true,
+		ID: "twilight/core/p", Version: 1, RequiredForCommit: true,
 		Initial: func() (any, error) { return struct{}{}, nil }, Apply: func(s any, _ DecodedEvent) (any, error) { return s, nil }, StateCodec: JSONStateCodec[struct{}]{}}}}
 	ext := ModuleDescriptor{Source: "acme", ID: "plugin", Projections: []ProjectionDefinition{{
-		ID: "acme/plugin/p", Version: 1, Authoritative: true,
+		ID: "acme/plugin/p", Version: 1, RequiredForCommit: true,
 		Initial: func() (any, error) { return struct{}{}, nil }, Apply: func(s any, _ DecodedEvent) (any, error) { return s, nil }, StateCodec: JSONStateCodec[struct{}]{}}}}
 	if _, err := BuildRegistryWithExtensions([]ModuleDescriptor{core}, []ModuleDescriptor{ext}); err == nil {
-		t.Fatal("extension declared an authoritative projection")
+		t.Fatal("extension declared a required-for-commit projection")
 	}
 	impostor := ext
 	impostor.Source = SourceTwilight
-	impostor.Projections[0].Authoritative = false
+	impostor.Projections[0].RequiredForCommit = false
 	if _, err := BuildRegistryWithExtensions([]ModuleDescriptor{core}, []ModuleDescriptor{impostor}); err == nil {
 		t.Fatal("extension claimed the twilight source")
 	}
-	ext.Projections[0].Authoritative = false
+	ext.Projections[0].RequiredForCommit = false
 	if _, err := BuildRegistryWithExtensions([]ModuleDescriptor{core}, []ModuleDescriptor{ext}); err != nil {
 		t.Fatalf("derived extension refused: %v", err)
 	}

@@ -20,7 +20,7 @@ type ProjectionReader interface {
 
 // ProjectionCache is the optional derived cache. Entries may be
 // lost or stale at any time; readers verify Through against the stream.
-// An Authoritative projection's entry is a checkpoint the Writer plans the
+// A required-for-commit projection's entry is a checkpoint the Writer plans the
 // next commit: its state bytes travel with the digest
 // the Writer computed when it saved them, in the same Value (see
 // module.SealCheckpoint), and a reader that finds the digest missing or
@@ -101,7 +101,7 @@ func SaveProjection(ctx context.Context, cache ProjectionCache, registry *module
 	if err != nil {
 		return err
 	}
-	if def.Authoritative {
+	if def.RequiredForCommit {
 		if encoded, err = module.SealCheckpoint(id, v, through, encoded); err != nil {
 			return err
 		}
@@ -110,14 +110,14 @@ func SaveProjection(ctx context.Context, cache ProjectionCache, registry *module
 }
 
 // LoadProjectionEntry reads a cache entry for def, unsealing and verifying
-// an authoritative one; an entry that does not verify is a
+// a required-for-commit one; an entry that does not verify is a
 // miss.
 func LoadProjectionEntry(ctx context.Context, cache ProjectionCache, def *module.ProjectionDefinition, sid SessionID) (jsonstable.Value, ledger.Head, bool, error) {
 	encoded, through, ok, err := cache.Load(ctx, sid, def.ID, def.Version)
 	if err != nil || !ok {
 		return jsonstable.Value{}, ledger.Head{}, false, err
 	}
-	if def.Authoritative {
+	if def.RequiredForCommit {
 		state, verified := module.OpenCheckpoint(def.ID, def.Version, through, encoded)
 		if !verified {
 			return jsonstable.Value{}, ledger.Head{}, false, nil

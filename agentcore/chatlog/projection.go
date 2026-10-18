@@ -120,8 +120,8 @@ var SurfaceProjection = module.ProjectionDefinition{
 	Consumes: chatlogConsumes,
 	// Assistant and tool_result entries are projected from Turn facts
 	// a fork inherits that conversation content.
-	Inherits:      module.InheritAll,
-	Authoritative: true,
+	Inherits:          module.InheritAll,
+	RequiredForCommit: true,
 	Initial: func() (any, error) {
 		return Surface{}, nil
 	},
@@ -402,9 +402,9 @@ type Context struct {
 
 var ContextProjection = module.ProjectionDefinition{
 	ID: ContextProjectionID, Version: 1,
-	Consumes:      chatlogConsumes,
-	Inherits:      module.InheritAll,
-	Authoritative: true,
+	Consumes:          chatlogConsumes,
+	Inherits:          module.InheritAll,
+	RequiredForCommit: true,
 	Initial: func() (any, error) {
 		return Context{Pending: map[InputID]Input{}, Superseded: map[ToolResultID]ToolResultID{}}, nil
 	},

@@ -391,18 +391,18 @@ func TestWriterWithoutCacheFoldsEverything(t *testing.T) {
 	}
 }
 
-// an authoritative projection's entry is a checkpoint sealed
+// a required-for-commit projection's entry is a checkpoint sealed
 // with a digest over its identity, position and state. A well-formed entry
 // whose state was not what the Writer saved (here: a derived projection's
-// entry copied under the authoritative one) is a miss, and the Writer
+// entry copied under the required-for-commit one) is a miss, and the Writer
 // refolds from the log; a derived projection's entry stays a plain state.
-func TestAuthoritativeEntryMustVerify(t *testing.T) {
+func TestRequiredForCommitEntryMustVerify(t *testing.T) {
 	ctx := context.Background()
 	counter := newApplyCounter()
 	typ := tpfx("k") + "row"
-	mk := func(id module.ProjectionID, authoritative bool) module.ProjectionDefinition {
+	mk := func(id module.ProjectionID, requiredForCommit bool) module.ProjectionDefinition {
 		return module.ProjectionDefinition{
-			ID: id, Version: 1, Consumes: []ledger.EventType{typ}, Authoritative: authoritative,
+			ID: id, Version: 1, Consumes: []ledger.EventType{typ}, RequiredForCommit: requiredForCommit,
 			Initial: func() (any, error) { return noteState{}, nil },
 			Apply: func(state any, e module.DecodedEvent) (any, error) {
 				counter.inc(id)
@@ -429,7 +429,7 @@ func TestAuthoritativeEntryMustVerify(t *testing.T) {
 	if err := w.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// Both entries are at head; the authoritative one is sealed.
+	// Both entries are at head; the required-for-commit one is sealed.
 	sealed, through, ok, err := f.cache.Load(ctx, "s", alphaID, 1)
 	if err != nil || !ok || through.Next != 2 {
 		t.Fatalf("alpha entry = ok:%v through:%d %v", ok, through.Next, err)

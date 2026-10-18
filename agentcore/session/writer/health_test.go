@@ -11,13 +11,13 @@ import (
 	"testing"
 )
 
-// healthModule has one event type and two projections over it: an
-// authoritative one and a derived one, both of which fail on the text "boom".
+// healthModule has one event type and two projections over it: a
+// required-for-commit one and a derived one, both of which fail on the text "boom".
 func healthModule() module.ModuleDescriptor {
 	typ := tpfx("h") + "row"
-	mk := func(id module.ProjectionID, authoritative bool) module.ProjectionDefinition {
+	mk := func(id module.ProjectionID, requiredForCommit bool) module.ProjectionDefinition {
 		return module.ProjectionDefinition{
-			ID: id, Version: 1, Consumes: []ledger.EventType{typ}, Authoritative: authoritative,
+			ID: id, Version: 1, Consumes: []ledger.EventType{typ}, RequiredForCommit: requiredForCommit,
 			Initial: func() (any, error) { return noteState{}, nil },
 			Apply: func(state any, e module.DecodedEvent) (any, error) {
 				text := e.Value.(notePayload).Text
@@ -33,12 +33,12 @@ func healthModule() module.ModuleDescriptor {
 	}
 	return module.ModuleDescriptor{Source: module.SourceTwilight, ID: "h", Streams: noteStreams(),
 		Events:      []module.EventDefinition{{Type: typ, Domain: noteDomain, Codecs: map[module.PayloadVersion]module.PayloadCodec{1: module.JSONCodec[notePayload]{}}}},
-		Projections: []module.ProjectionDefinition{mk("h/authoritative", true), mk("h/derived", false)}}
+		Projections: []module.ProjectionDefinition{mk("h/required", true), mk("h/derived", false)}}
 }
 
 // a derived projection that cannot fold a commit does not refuse
 // the commit; it is marked unhealthy, reads report it, and it is not cached.
-// An authoritative projection that cannot fold refuses the commit.
+// A required-for-commit projection that cannot fold refuses the commit.
 func TestDerivedProjectionFailureDoesNotBlockCommit(t *testing.T) {
 	ctx := context.Background()
 	store := filestoretest.Store(t)
@@ -62,12 +62,12 @@ func TestDerivedProjectionFailureDoesNotBlockCommit(t *testing.T) {
 	if res, err := commit("c1", "one", ""); err != nil || res.Outcome != CommitApplied {
 		t.Fatalf("c1 = %+v %v", res, err)
 	}
-	// Both projections fail on boom, so the authoritative one refuses.
+	// Both projections fail on boom, so the required-for-commit one refuses.
 	if res, err := commit("c2", "boom", ""); err != nil || res.Outcome != CommitInvalid {
-		t.Fatalf("authoritative refusal = %+v %v", res, err)
+		t.Fatalf("required-for-commit refusal = %+v %v", res, err)
 	}
 	// Reopen with only the derived projection failing: rebuild the registry
-	// with an authoritative projection that accepts everything.
+	// with a required-for-commit projection that accepts everything.
 	registry2, err := module.BuildRegistry(func() module.ModuleDescriptor {
 		m := healthModule()
 		m.Projections[0].Apply = func(state any, e module.DecodedEvent) (any, error) { return state, nil }
@@ -89,8 +89,8 @@ func TestDerivedProjectionFailureDoesNotBlockCommit(t *testing.T) {
 	if _, _, err := w.Projections().Load(ctx, "s", "h/derived", 1); !errors.Is(err, &ledger.Error{Code: ledger.CodeProjectionUnhealthy}) {
 		t.Fatalf("derived read = %v, want unhealthy", err)
 	}
-	if _, _, err := w.Projections().Load(ctx, "s", "h/authoritative", 1); err != nil {
-		t.Fatalf("authoritative read after a derived failure: %v", err)
+	if _, _, err := w.Projections().Load(ctx, "s", "h/required", 1); err != nil {
+		t.Fatalf("required-for-commit read after a derived failure: %v", err)
 	}
 	// The next commit still lands and the unhealthy projection stays behind.
 	if res, err := commit("c3", "three", ""); err != nil || res.Outcome != CommitApplied {
@@ -99,14 +99,14 @@ func TestDerivedProjectionFailureDoesNotBlockCommit(t *testing.T) {
 	if _, through, ok, _ := cache.Load(ctx, "s", "h/derived", 1); ok && through.Next > 1 {
 		t.Fatalf("unhealthy projection cached at head %+v", through)
 	}
-	if _, through, ok, _ := cache.Load(ctx, "s", "h/authoritative", 1); !ok || through.Next != 3 {
+	if _, through, ok, _ := cache.Load(ctx, "s", "h/required", 1); !ok || through.Next != 3 {
 		t.Fatalf("healthy projection cache = ok=%v %+v, want head 3", ok, through)
 	}
 }
 
 // across a reopen: a derived projection that cannot fold the log
 // does not keep the Session from opening; it stops at its last good commit
-// and is unhealthy, the authoritative projections fold to head.
+// and is unhealthy, the required-for-commit projections fold to head.
 func TestDerivedProjectionFailureDoesNotBlockReopen(t *testing.T) {
 	ctx := context.Background()
 	store := filestoretest.Store(t)
@@ -138,7 +138,7 @@ func TestDerivedProjectionFailureDoesNotBlockReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	strict := healthModule()
-	strict.Projections[0].Apply = permissive.Projections[0].Apply // authoritative one keeps folding
+	strict.Projections[0].Apply = permissive.Projections[0].Apply // required-for-commit one keeps folding
 	reg2, err := module.BuildRegistry(strict)
 	if err != nil {
 		t.Fatal(err)
@@ -150,8 +150,8 @@ func TestDerivedProjectionFailureDoesNotBlockReopen(t *testing.T) {
 	if _, _, err := w.Projections().Load(ctx, "s", "h/derived", 1); !errors.Is(err, &ledger.Error{Code: ledger.CodeProjectionUnhealthy}) {
 		t.Fatalf("derived after reopen = %v, want unhealthy", err)
 	}
-	if _, head, err := w.Projections().Load(ctx, "s", "h/authoritative", 1); err != nil || head.Next != 3 {
-		t.Fatalf("authoritative after reopen = %+v %v", head, err)
+	if _, head, err := w.Projections().Load(ctx, "s", "h/required", 1); err != nil || head.Next != 3 {
+		t.Fatalf("required-for-commit after reopen = %+v %v", head, err)
 	}
 	// And the Session still writes.
 	if res, err := w.Commit(ctx, func(View) (*SemanticGroup, error) {
@@ -159,14 +159,14 @@ func TestDerivedProjectionFailureDoesNotBlockReopen(t *testing.T) {
 	}); err != nil || res.Outcome != CommitApplied {
 		t.Fatalf("commit after reopen = %+v %v", res, err)
 	}
-	// An authoritative projection that cannot fold the log refuses the open.
-	failingAuth := healthModule()
-	reg3, err := module.BuildRegistry(failingAuth)
+	// A required-for-commit projection that cannot fold the log refuses the open.
+	failingRequired := healthModule()
+	reg3, err := module.BuildRegistry(failingRequired)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = w.Close(ctx)
 	if _, err := acquireTestWriterConfig(ctx, store, reg3, Admission{}, "s", session.OpenOptions{Takeover: true}, WritersConfig{}); err == nil {
-		t.Fatal("reopen with a failing authoritative projection succeeded")
+		t.Fatal("reopen with a failing required-for-commit projection succeeded")
 	}
 }

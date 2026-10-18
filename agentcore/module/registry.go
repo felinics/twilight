@@ -182,7 +182,7 @@ func validSegment(kind, v string) error {
 
 // BuildRegistry validates the module set and freezes the indexes. Every
 // module passed here is trusted: the caller vouches for it, so it may
-// declare authoritative projections. Modules from outside the
+// declare required-for-commit projections. Modules from outside the
 // deployment's trust boundary go through BuildRegistryWithExtensions.
 func BuildRegistry(modules ...ModuleDescriptor) (*Registry, error) {
 	return BuildRegistryWithExtensions(modules, nil)
@@ -190,8 +190,8 @@ func BuildRegistry(modules ...ModuleDescriptor) (*Registry, error) {
 
 // BuildRegistryWithExtensions builds a registry from trusted core modules
 // and untrusted extensions. Trust is a property of how a module reached the
-// registry, not of what its descriptor says: an extension may not declare an
-// authoritative projection and may not use the SourceTwilight source, so no
+// registry, not of what its descriptor says: an extension may not declare a
+// required-for-commit projection and may not use the SourceTwilight source, so no
 // descriptor can claim the first-party capability for itself.
 func BuildRegistryWithExtensions(core, extensions []ModuleDescriptor) (*Registry, error) {
 	modules := make([]ModuleDescriptor, 0, len(core)+len(extensions))
@@ -206,8 +206,8 @@ func BuildRegistryWithExtensions(core, extensions []ModuleDescriptor) (*Registry
 			return nil, &ledger.Error{Code: ledger.CodeInvalid, Detail: fmt.Sprintf("extension module %q claims the %s source", m.ID, SourceTwilight)}
 		}
 		for _, p := range m.Projections {
-			if p.Authoritative {
-				return nil, &ledger.Error{Code: ledger.CodeInvalid, Detail: fmt.Sprintf("projection %q of extension %s/%s declares Authoritative; only trusted core modules may", p.ID, m.Source, m.ID)}
+			if p.RequiredForCommit {
+				return nil, &ledger.Error{Code: ledger.CodeInvalid, Detail: fmt.Sprintf("projection %q of extension %s/%s declares RequiredForCommit; only trusted core modules may", p.ID, m.Source, m.ID)}
 			}
 		}
 		modules = append(modules, *m)
@@ -253,8 +253,8 @@ func BuildRegistryWithExtensions(core, extensions []ModuleDescriptor) (*Registry
 			// Refusing commits is a capability of trusted core modules, not
 			// something a descriptor declares for itself; the
 			// extension path above already refused it, this guards the map.
-			if p.Authoritative && !trusted[key] {
-				return nil, &ledger.Error{Code: ledger.CodeInvalid, Detail: fmt.Sprintf("projection %q of module %s/%s declares Authoritative without trust", p.ID, m.Source, m.ID)}
+			if p.RequiredForCommit && !trusted[key] {
+				return nil, &ledger.Error{Code: ledger.CodeInvalid, Detail: fmt.Sprintf("projection %q of module %s/%s declares RequiredForCommit without trust", p.ID, m.Source, m.ID)}
 			}
 			k := projectionKey{p.ID, p.Version}
 			if _, dup := r.projections[k]; dup {

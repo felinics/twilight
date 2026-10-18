@@ -97,7 +97,7 @@ func (p *projector) resume(page *session.CommitPage, from ledger.CommitSeq) erro
 		}
 		folded, err := p.registry.FoldFrom(scope, p.states[k], page.Commits[off:], page.Header.Seed())
 		if err != nil {
-			if scope.Def.Authoritative {
+			if scope.Def.RequiredForCommit {
 				return err
 			}
 			// A derived projection that cannot fold the log does not keep
@@ -165,7 +165,7 @@ type folded struct {
 }
 
 // fold pre-folds one provisional commit into every projection without
-// installing anything. An authoritative projection that refuses the commit
+// installing anything. A required-for-commit projection that refuses the commit
 // refuses it for the Writer; a derived one keeps its last good state and is
 // marked unhealthy once the commit lands. A projection already
 // unhealthy is not folded further.
@@ -177,7 +177,7 @@ func (p *projector) fold(provisional ledger.Commit) (folded, error) {
 		}
 		state, err := p.registry.Fold(scope, p.states[k], []ledger.Commit{provisional})
 		if err != nil {
-			if scope.Def.Authoritative {
+			if scope.Def.RequiredForCommit {
 				return folded{}, err
 			}
 			if out.failed == nil {

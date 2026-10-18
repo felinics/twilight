@@ -172,7 +172,7 @@ func New(p Ports) (*Kernel, error) { //nolint:gocritic // hugeParam: Ports is a 
 
 // NewRegistry builds the module registry of a Kernel: the first-party
 // modules as trusted core, extensions after them. Extensions cannot declare
-// authoritative projections.
+// required-for-commit projections.
 func NewRegistry(extensions []module.ModuleDescriptor) (*module.Registry, error) {
 	return module.BuildRegistryWithExtensions(
 		[]module.ModuleDescriptor{chatlog.Module, sessionstore.Module, compaction.Module}, extensions)

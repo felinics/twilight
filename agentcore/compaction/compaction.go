@@ -152,11 +152,11 @@ var requestBindings = module.BindingReferenceDefinition{
 // its parent's in-flight summary execution or acknowledgement responsibility.
 var Projection = module.ProjectionDefinition{
 	ID: ProjectionID, Version: 1,
-	Consumes:      []ledger.EventType{TypeRequested, TypeFinished, TypeAcknowledged},
-	Authoritative: true,
-	Initial:       func() (any, error) { return State{Operations: map[ID]Operation{}}, nil },
-	StateCodec:    module.JSONStateCodec[State]{},
-	Apply:         apply,
+	Consumes:          []ledger.EventType{TypeRequested, TypeFinished, TypeAcknowledged},
+	RequiredForCommit: true,
+	Initial:           func() (any, error) { return State{Operations: map[ID]Operation{}}, nil },
+	StateCodec:        module.JSONStateCodec[State]{},
+	Apply:             apply,
 }
 
 var Module = module.ModuleDescriptor{
