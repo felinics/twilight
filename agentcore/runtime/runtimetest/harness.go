@@ -425,7 +425,12 @@ func (h *harness) complete(turnID turn.TurnID) commitResult {
 // waitingTool takes the Turn to a ToolStep whose single call needs approval.
 func (h *harness) waitingTool(turnID turn.TurnID) {
 	h.t.Helper()
-	spec := h.spec(turn.ApprovalRequired)
+	h.waitingToolWithPolicy(turnID, turn.ApprovalRequired)
+}
+
+func (h *harness) waitingToolWithPolicy(turnID turn.TurnID, policy turn.ResponsePolicy) {
+	h.t.Helper()
+	spec := h.spec(policy)
 	step := h.prepare(turnID, []turn.ToolSpec{spec})
 	eff := h.modelEffect(turnID, step)
 	if res := h.mustTurnCommit(turnID, schema.Identity().DeriveStartCommandID(eff), 0, turn.StartModelExecution{StepID: step, Effect: eff}); res.Status != store.CommitAccepted {

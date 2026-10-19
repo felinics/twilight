@@ -184,6 +184,11 @@ func (c *Coordinator) Respond(ctx context.Context, w writer.Writer, req turn.Res
 			return TurnResult{}, fmt.Errorf("sessionkernel: response identity does not match request")
 		}
 		id = schema.Identity().DeriveResponseCommandID(req.TurnID, req.StepID, req.CallID, req.ID)
+	case turn.ApproveToolCall:
+		if v.StepID != req.StepID || v.CallID != req.CallID || v.ResponseID != req.ID {
+			return TurnResult{}, fmt.Errorf("sessionkernel: response identity does not match request")
+		}
+		id = schema.Identity().DeriveResponseCommandID(req.TurnID, req.StepID, req.CallID, req.ID)
 	case turn.RejectToolCall:
 		if v.StepID != req.StepID || v.CallID != req.CallID || v.ResponseID != req.ID {
 			return TurnResult{}, fmt.Errorf("sessionkernel: response identity does not match request")
@@ -200,7 +205,7 @@ func (c *Coordinator) Respond(ctx context.Context, w writer.Writer, req turn.Res
 	if err != nil {
 		return TurnResult{}, err
 	}
-	if err := c.commit(ctx, w, "respond", unit.Work{CommitID: ledger.CommitID(env.ID), Parts: []unit.Part{part}}); err != nil && !errors.Is(err, turn.ErrTurnTerminal) {
+	if err := c.commit(ctx, w, "respond", unit.Work{CommitID: ledger.CommitID(env.ID), ReplayCheck: part.CheckResponseReplay, Parts: []unit.Part{part}}); err != nil && !errors.Is(err, turn.ErrTurnTerminal) {
 		return TurnResult{}, err
 	}
 	return c.respond(ctx, sessionstore.TurnRef{SessionID: w.SessionID(), TurnID: req.TurnID})

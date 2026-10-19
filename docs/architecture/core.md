@@ -119,10 +119,8 @@ on their Inbox polls. Automatic discovery after a crashed owner relies on the
 configured finite leases and activation scan. Explicitly closed Sessions need
 another activation or Open; released leases are not expired-lease candidates.
 
-Submission payload version 2 records explicit placement. This pre-release
-format is intentionally breaking: v1 submission facts and v1 projection
-snapshots are not readable by this version. Strict named-Turn delivery and
-idle-only starts remain separate low-level primitives.
+Strict named-Turn delivery and idle-only starts remain separate low-level
+primitives.
 
 ### Turn
 

@@ -156,8 +156,11 @@ func (b *bound) Commit(ctx context.Context, req store.CommitRequest) (store.Comm
 		return store.CommitResult{}, err
 	}
 	work := unit.Work{CommitID: ledger.CommitID(req.Command.ID), Parts: []unit.Part{cmd}}
-	if _, ok := req.Command.Command.(turn.AcceptInput); ok {
+	switch req.Command.Command.(type) {
+	case turn.AcceptInput:
 		work.ReplayCheck = cmd.CheckInputReplay
+	case turn.ApproveToolCall, turn.RejectToolCall, turn.SubmitToolResponse:
+		work.ReplayCheck = cmd.CheckResponseReplay
 	}
 	res, err := unit.Commit(ctx, b.w, b.s.nowMilli(), work)
 	if err != nil {
@@ -291,6 +294,64 @@ func (c *Command) CheckInputReplay(commit ledger.Commit) error {
 	return nil
 }
 
+// CheckResponseReplay compares a response with its committed outcome. Response
+// command IDs identify the request, so the decision and content need a separate
+// check even after the call has moved on or the Turn has ended.
+func (c *Command) CheckResponseReplay(commit ledger.Commit) error {
+	facts, err := c.s.factsOf(commit, c.req.Command.TurnID)
+	if err != nil {
+		return err
+	}
+	if len(facts) != 1 {
+		return turn.ErrCommandConflict
+	}
+	var step turn.StepID
+	var call turn.CallID
+	var response turn.ResponseID
+	switch cmd := c.req.Command.Command.(type) {
+	case turn.ApproveToolCall:
+		step, call, response = cmd.StepID, cmd.CallID, cmd.ResponseID
+		if fact, ok := facts[0].(turn.ToolCallApproved); !ok || fact != turn.ToolCallApproved(cmd) {
+			return turn.ErrCommandConflict
+		}
+	case turn.SubmitToolResponse:
+		step, call, response = cmd.StepID, cmd.CallID, cmd.ResponseID
+		want := turn.ToolCallAnswered{StepID: step, CallID: call, ResponseID: response, ResponseDigest: cmd.ResponseDigest}
+		if fact, ok := facts[0].(turn.ToolCallAnswered); !ok || fact != want {
+			return turn.ErrCommandConflict
+		}
+	case turn.RejectToolCall:
+		step, call, response = cmd.StepID, cmd.CallID, cmd.ResponseID
+		fact, ok := facts[0].(turn.ToolCallFailed)
+		if !ok || fact.StepID != step || fact.CallID != call || fact.Effect != "" ||
+			fact.Outcome != turn.ToolOutcomeKnown || fact.Failure.Message != cmd.Reason {
+			return turn.ErrCommandConflict
+		}
+		var kind turn.ResponseKind
+		switch fact.Failure.Class {
+		case turn.FailurePermissionDenied:
+			kind = turn.ResponseApproval
+		case turn.FailureResponseRejected:
+			kind = turn.ResponseExternal
+		default:
+			return turn.ErrCommandConflict
+		}
+		digest, err := schema.Canonical().DigestToolResponseDecision(kind, turn.ResponseDecisionRejected, cmd.Reason)
+		if err != nil {
+			return err
+		}
+		if digest != cmd.ResponseDigest {
+			return turn.ErrCommandConflict
+		}
+	default:
+		return errors.New("sessionstore: response replay check requires a response command")
+	}
+	if c.req.Command.ID != schema.Identity().DeriveResponseCommandID(c.req.Command.TurnID, step, call, response) {
+		return turn.ErrCommandConflict
+	}
+	return nil
+}
+
 // Result maps the unit's outcome onto the Turn's CommitResult. w is the Writer
 // the unit committed through; a replay reads the current snapshot from it.
 func (c *Command) Result(ctx context.Context, w writer.Writer, res *writer.CommitResult) (store.CommitResult, error) {
@@ -304,8 +365,8 @@ func (c *Command) Result(ctx context.Context, w writer.Writer, res *writer.Commi
 			Snapshot: store.Snapshot{State: c.after, Position: c.position}}, nil
 	case writer.CommitAlreadyApplied:
 		// The Session (SessionID, CommitID) index identifies a replay.
-		// Command IDs are content-derived; input commands additionally verify
-		// immutable input digests through CheckInputReplay before reaching here.
+		// Input and response commands additionally verify their content through
+		// their ReplayCheck before reaching here.
 		snapshot, err := c.s.Bind(w).Load(ctx, c.req.Command.TurnID)
 		if err != nil {
 			return store.CommitResult{}, err

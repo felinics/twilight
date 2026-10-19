@@ -24,6 +24,7 @@ func Run(t *testing.T, factory Factory) {
 	}{
 		{"Start", testStart},
 		{"Deliver", testDeliver},
+		{"Respond", testRespond},
 		{"Stop", testStop},
 		{"Status", testStatus},
 		{"Projection", testProjection},
