@@ -28,7 +28,10 @@ func SubmitInputWithPlacement(id turn.InputID, content turn.CanonicalJSON, place
 		if err != nil {
 			return nil, err
 		}
-		surface := state.(Surface)
+		surface, ok := state.(Surface)
+		if !ok {
+			return nil, fmt.Errorf("chatlog: surface projection is %T", state)
+		}
 		if old, ok := surface.Inputs.Get(InputID(id)); ok {
 			digest, err := DigestInput(InputID(id), content)
 			if err != nil {
@@ -53,7 +56,11 @@ func WithdrawInput(id turn.InputID, reason string) unit.Part {
 		if err != nil {
 			return nil, err
 		}
-		in, ok := state.(Surface).Inputs.Get(InputID(id))
+		surface, ok := state.(Surface)
+		if !ok {
+			return nil, fmt.Errorf("chatlog: surface projection is %T", state)
+		}
+		in, ok := surface.Inputs.Get(InputID(id))
 		if !ok || in.Status != InputSubmitted {
 			return nil, ErrNotSubmitted
 		}

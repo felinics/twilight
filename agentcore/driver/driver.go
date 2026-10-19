@@ -33,6 +33,19 @@ type StepResult struct {
 	Dispatched  []effect.AssignmentKey
 }
 
+// Driver interprets durable Session state for a finite interval. It never
+// awaits an external execution, starts a background continuation, acquires
+// ownership, or retains the caller's Writer after a method returns.
+type Driver struct {
+	TurnStore       *sessionstore.SessionTurnStore
+	Loops           *Loops
+	Compactions     *Compactions
+	MissingEffects  reconcile.MissingPolicy
+	Redispatches    redispatch.Store
+	MaxRedispatches int
+	Sink            loop.EventSink
+}
+
 // RecoverInterrupted applies the execution policy to every executing target
 // in the Session before a host starts driving it. Recovery is deliberately a
 // finite operation: it records only durable recovery commands and leaves the
@@ -60,19 +73,6 @@ func (d *Driver) RecoverInterrupted(ctx context.Context, w writer.Writer) (int, 
 		},
 	}
 	return d.TurnStore.RecoverInterrupted(ctx, w, rec)
-}
-
-// Driver interprets durable Session state for a finite interval. It never
-// awaits an external execution, starts a background continuation, acquires
-// ownership, or retains the caller's Writer after a method returns.
-type Driver struct {
-	TurnStore       *sessionstore.SessionTurnStore
-	Loops           *Loops
-	Compactions     *Compactions
-	MissingEffects  reconcile.MissingPolicy
-	Redispatches    redispatch.Store
-	MaxRedispatches int
-	Sink            loop.EventSink
 }
 
 // Step reconciles existing executions once, settles available outcomes, and
