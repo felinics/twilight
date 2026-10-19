@@ -79,16 +79,30 @@ func Next(s turn.MachineState) (Action, error) {
 	case turn.ToolStep:
 		var pending []turn.CallID
 		live := false
+		executing := 0
 		for _, c := range cur.Calls {
 			switch c.Status {
 			case turn.ToolPending:
 				pending = append(pending, c.CallID)
 				live = true
-			case turn.ToolWaiting, turn.ToolExecuting:
+			case turn.ToolWaiting:
+				live = true
+			case turn.ToolExecuting:
+				executing++
 				live = true
 			}
 		}
-		if len(pending) > 0 {
+		// Scheduling spans activations: capacity already used by durable
+		// executing calls is unavailable to a new finite step.
+		capacity := len(pending)
+		if cur.Scheduling.Mode == turn.ToolScheduleSequential {
+			capacity = min(capacity, max(0, 1-executing))
+		}
+		if cur.Scheduling.MaxParallel > 0 {
+			capacity = min(capacity, max(0, cur.Scheduling.MaxParallel-executing))
+		}
+		if capacity > 0 {
+			pending = pending[:capacity]
 			return StartToolCalls{StepID: cur.RefValue.ID, CallIDs: pending}, nil
 		}
 		if live {
