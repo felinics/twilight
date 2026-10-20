@@ -141,15 +141,28 @@ func (f *Factory) Bind(ctx context.Context, kernel session.Handle) (Writer, erro
 		projections: newProjector(registry, sid, cfg.Cache, cfg.CachePolicy),
 		admission:   &admitter{Admission: admission, segment: header.ID},
 		observers:   &observers{list: cfg.Observers}}
-	// The log is read from the earliest cache entry any projection resumes
-	// judging an entry costs one commit read, and a clean
-	// Close leaves every entry at the head.
+	// Projections commonly share a checkpoint boundary after Close. Read each
+	// distinct position once during this Bind; every entry still validates its
+	// own boundary and codec. Never retain these reads across acquisitions.
+	type boundaryRead struct {
+		commit ledger.Commit
+		ok     bool
+	}
+	boundaries := make(map[ledger.CommitSeq]boundaryRead)
 	at := func(seq ledger.CommitSeq) (ledger.Commit, bool) {
+		if cached, ok := boundaries[seq]; ok {
+			return cached.commit, cached.ok
+		}
 		one, err := store.ReadCommits(ctx, session.CommitReadRequest{SessionID: sid, From: seq, Limit: 1})
-		if err != nil || len(one.Commits) != 1 {
+		if err != nil {
 			return ledger.Commit{}, false
 		}
-		return one.Commits[0], true
+		var result boundaryRead
+		if len(one.Commits) == 1 {
+			result = boundaryRead{commit: one.Commits[0], ok: true}
+		}
+		boundaries[seq] = result
+		return result.commit, result.ok
 	}
 	from, err := w.projections.prepare(ctx, header, at)
 	if err != nil {

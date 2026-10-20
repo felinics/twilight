@@ -463,3 +463,55 @@ func TestRequiredForCommitEntryMustVerify(t *testing.T) {
 		t.Fatalf("alpha notes = %v", got)
 	}
 }
+
+// Bind must share boundary reads without carrying them into another ownership
+// epoch: each reopening below appends new history and refreshes the caches.
+func TestBindSharesCheckpointBoundaryReads(t *testing.T) {
+	ctx := context.Background()
+	f := newCacheFixture(t)
+	cfg := WritersConfig{Cache: f.cache, CachePolicy: module.CacheEvery(0).AtClose()}
+	w := f.open(t, cfg)
+	f.commit(t, w, "c1", "n1")
+	if err := w.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	for round := 0; round < 2; round++ {
+		store := &checkpointReadStore{Store: f.store}
+		reopened, err := acquireTestWriterConfig(ctx, store, f.registry, Admission{}, "s", session.OpenOptions{}, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = reopened.Close(ctx) })
+		if store.boundaries != 1 {
+			t.Errorf("round %d: read shared checkpoint %d times; want 1", round, store.boundaries)
+		}
+		want := []string{"n1"}
+		if round > 0 {
+			want = append(want, "n2")
+		}
+		for _, id := range []module.ProjectionID{alphaID, betaID} {
+			if got := f.notes(t, reopened, id); !sameNotes(got, want) {
+				t.Fatalf("round %d projection %s: got %v; want %v", round, id, got, want)
+			}
+		}
+		if round == 0 {
+			f.commit(t, reopened, "c2", "n2")
+		}
+		if err := reopened.Close(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+type checkpointReadStore struct {
+	session.Store
+	boundaries int
+}
+
+func (s *checkpointReadStore) ReadCommits(ctx context.Context, req session.CommitReadRequest) (session.CommitPage, error) {
+	if req.Limit == 1 {
+		s.boundaries++
+	}
+	return s.Store.ReadCommits(ctx, req)
+}
