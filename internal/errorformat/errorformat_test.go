@@ -95,6 +95,63 @@ func TestDecodeOpenAI(t *testing.T) {
 			Body:   `not json`,
 			Want:   sdk.APIError{RequestID: "0b6c3e1a-bedrock", Kind: sdk.KindServerError},
 		},
+		{
+			// A ChatGPT account's token (Sign in with ChatGPT) gets the request
+			// ID in x-oai-request-id and no x-request-id.
+			Name:   "chatgpt token request id",
+			Status: http.StatusBadRequest,
+			Header: reqID("x-oai-request-id", "req_0123456789abcdef0123456789abcdef"),
+			Body:   `{"detail":"Stream must be set to true"}`,
+			Want:   sdk.APIError{Message: "Stream must be set to true", RequestID: "req_0123456789abcdef0123456789abcdef", Kind: sdk.KindUnknown},
+		},
+	})
+}
+
+// A request made with a ChatGPT account's token (Sign in with ChatGPT) that
+// fails admission gets a detail body instead of an error object. The first
+// three bodies are verbatim from https://api.openai.com/v1/responses, captured
+// on 2026-10-10 for a request with temperature, one with stream false and one
+// for gpt-4o.
+func TestDecodeOpenAIDetail(t *testing.T) {
+	providertest.RunErrorCases(t, "openai-responses", errorformat.DecodeOpenAI, []providertest.ErrorCase{
+		{
+			Name:   "unsupported parameter",
+			Status: http.StatusBadRequest,
+			Body:   `{"detail":"Unsupported parameter: temperature"}`,
+			Want:   sdk.APIError{Message: "Unsupported parameter: temperature", Kind: sdk.KindUnknown},
+		},
+		{
+			Name:   "stream required",
+			Status: http.StatusBadRequest,
+			Body:   `{"detail":"Stream must be set to true"}`,
+			Want:   sdk.APIError{Message: "Stream must be set to true", Kind: sdk.KindUnknown},
+		},
+		{
+			Name:   "model not supported",
+			Status: http.StatusBadRequest,
+			Body:   `{"detail":"The 'gpt-4o' model is not supported when using Codex with a ChatGPT account."}`,
+			Want:   sdk.APIError{Message: "The 'gpt-4o' model is not supported when using Codex with a ChatGPT account.", Kind: sdk.KindUnknown},
+		},
+		{
+			// A detail that is not a string is kept as its compact JSON text.
+			Name:   "structured detail",
+			Status: http.StatusUnprocessableEntity,
+			Body:   `{"detail": [{"loc": ["body", "model"], "msg": "Field required"}]}`,
+			Want:   sdk.APIError{Message: `[{"loc":["body","model"],"msg":"Field required"}]`, Kind: sdk.KindUnknown},
+		},
+		{
+			Name:   "null detail",
+			Status: http.StatusBadRequest,
+			Body:   `{"detail":null}`,
+			Want:   sdk.APIError{Kind: sdk.KindUnknown},
+		},
+		{
+			// The error object's message wins over detail.
+			Name:   "error object and detail",
+			Status: http.StatusBadRequest,
+			Body:   `{"error":{"message":"bad","type":"invalid_request_error","code":"made_up"},"detail":"ignored"}`,
+			Want:   sdk.APIError{Type: "invalid_request_error", Code: "made_up", Message: "bad", Kind: sdk.KindUnknown},
+		},
 	})
 }
 
