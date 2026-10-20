@@ -582,5 +582,5 @@ var Module = module.ModuleDescriptor{
 		def[CompactionCreatedPayload](TypeCompactionCreated, checkCompactionCreated),
 		def[CompactionInvalidatedPayload](TypeCompactionInvalidated, checkCompactionInvalidated),
 	},
-	Projections: []module.ProjectionDefinition{SurfaceProjection, ContextProjection},
+	Projections: []module.ProjectionDefinition{SurfaceProjection, ContextProjection, PendingProjection},
 }

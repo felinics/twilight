@@ -94,7 +94,7 @@ func (r *SessionRuntime) Step(ctx context.Context) (driver.StepResult, error) {
 		return driver.StepResult{}, err
 	}
 	if active, ok := surface.Active(); ok {
-		chat, err := chatlog.ReadSurface(ctx, r.w.Projections(), r.w.SessionID())
+		chat, err := chatlog.ReadPending(ctx, r.w.Projections(), r.w.SessionID())
 		if err != nil {
 			return driver.StepResult{}, err
 		}
@@ -128,7 +128,7 @@ func (r *SessionRuntime) Step(ctx context.Context) (driver.StepResult, error) {
 			return driver.StepResult{Disposition: driver.Waiting}, nil
 		}
 	}
-	chat, err := chatlog.ReadSurface(ctx, r.w.Projections(), r.w.SessionID())
+	chat, err := chatlog.ReadPending(ctx, r.w.Projections(), r.w.SessionID())
 	if err != nil {
 		return driver.StepResult{}, err
 	}

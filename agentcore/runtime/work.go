@@ -32,7 +32,7 @@ type Work struct {
 func Inspect(ctx context.Context, reader session.ProjectionReader, sid session.SessionID) (Work, error) {
 	states, err := session.LoadProjections(ctx, reader, sid,
 		session.ProjectionRef{ID: sessionstore.MachineProjectionID, Version: sessionstore.MachineProjection.Version},
-		session.ProjectionRef{ID: chatlog.SurfaceProjectionID, Version: chatlog.SurfaceProjection.Version},
+		session.ProjectionRef{ID: chatlog.PendingProjectionID, Version: chatlog.PendingProjection.Version},
 		session.ProjectionRef{ID: compaction.ProjectionID, Version: compaction.Projection.Version},
 	)
 	if err != nil {
@@ -46,11 +46,11 @@ func Inspect(ctx context.Context, reader session.ProjectionReader, sid session.S
 	work := Work{Revision: uint64(head.Next)}
 	value, head = states[1].State, states[1].Through
 	work.Revision = min(work.Revision, uint64(head.Next))
-	chat, ok := value.(chatlog.Surface)
+	chat, ok := value.(chatlog.Pending)
 	if !ok {
-		return Work{}, fmt.Errorf("runtime: chatlog projection is %T", value)
+		return Work{}, fmt.Errorf("runtime: pending input projection is %T", value)
 	}
-	work.Ready = len(machine.Active) == 0 && len(chat.SubmittedInputs()) > 0
+	work.Ready = len(machine.Active) == 0 && chat.Inputs.Len() > 0
 	for id := range machine.Active {
 		state := machine.Active[id]
 		action, err := plan.Next(state)
