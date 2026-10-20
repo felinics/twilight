@@ -11,6 +11,7 @@ import (
 	"github.com/felinics/twilight/agentcore/executor/store"
 	"github.com/felinics/twilight/agentcore/executor/store/storetest"
 	"github.com/felinics/twilight/agentcore/ledger"
+	"github.com/felinics/twilight/agentcore/turn"
 	"github.com/felinics/twilight/agentcore/turn/effect"
 )
 
@@ -454,5 +455,154 @@ func TestWorkerBoundedStart(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Ending an activation's RPC context does not revoke an accepted assignment.
+// Exercise the windows before Start, including after durable dispatch intent;
+// a non-replayable tool must start once without waiting for lease expiry.
+func TestWorkerCallerEndsBeforeStart(t *testing.T) {
+	for _, boundary := range []string{"claim", "dispatch_commit", "pre_rpc"} {
+		for _, durableCancel := range []bool{false, true} {
+			t.Run(boundary+map[bool]string{false: "/continue", true: "/cancel"}[durableCancel], func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				base := storetest.NewMap(nil)
+				records := &dispatchBoundaryGate{Store: base, boundary: boundary, entered: make(chan struct{}), release: make(chan struct{})}
+				release := sync.OnceFunc(func() { close(records.release) })
+				defer release()
+				backend := newControlledBackend()
+				backend.outcome = func(context.Context, string) (effect.Outcome, error) {
+					starts, _, cancels := backend.counts()
+					if starts == 0 && cancels == 0 {
+						return effect.Outcome{}, effect.ErrExecutionNotFound
+					}
+					if cancels > 0 {
+						return effect.Outcome{Result: effect.Cancelled{}}, nil
+					}
+					return effect.Outcome{Result: effect.ToolExecutionSucceeded{Result: turn.ToolExecutionResult{Output: turn.MustParseCanonicalJSON(`"ok"`)}}}, nil
+				}
+				worker, err := executor.NewWorker(context.Background(), records, []executor.Route{executor.Default("test", backend)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { release(); worker.Close() }()
+				a := testToolAssignment()
+				body, _ := a.Tool()
+				body.Replay = turn.ReplayForbidden
+				a.Body = body
+				dispatched := make(chan error, 1)
+				go func() { dispatched <- worker.Dispatch(ctx, a) }()
+				waitTest(t, records.entered)
+				cancel()
+				if durableCancel {
+					if err := worker.Cancel(context.Background(), a.Key()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				release()
+				select {
+				case <-dispatched:
+				case <-time.After(3 * time.Second):
+					t.Fatal("Dispatch did not exit")
+				}
+				waitCtx, stop := context.WithTimeout(context.Background(), time.Second)
+				defer stop()
+				out, err := awaitOutcome(waitCtx, worker, a.Key())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if durableCancel {
+					if _, ok := out.Result.(effect.Cancelled); !ok {
+						t.Fatalf("lost cancellation: %#v", out.Result)
+					}
+				} else if _, ok := out.Result.(effect.ToolExecutionSucceeded); !ok {
+					t.Fatalf("lost accepted tool: %#v", out.Result)
+				}
+				starts, restarts, _ := backend.counts()
+				want := 1
+				if durableCancel {
+					want = 0
+				}
+				if starts != want || restarts != 0 {
+					t.Fatalf("starts=%d restarts=%d, want %d/0", starts, restarts, want)
+				}
+			})
+		}
+	}
+}
+
+type dispatchBoundaryGate struct {
+	store.Store
+	boundary         string
+	once             sync.Once
+	ctx              context.Context
+	entered, release chan struct{}
+}
+
+func (s *dispatchBoundaryGate) gate(ctx context.Context) {
+	first := false
+	s.once.Do(func() { first = true; s.ctx = ctx; close(s.entered) })
+	if first {
+		<-s.release
+	}
+}
+
+func (s *dispatchBoundaryGate) Acquire(ctx context.Context, key effect.AssignmentKey, owner string, ttl time.Duration) (store.Lease, bool, error) {
+	lease, ok, err := s.Store.Acquire(ctx, key, owner, ttl)
+	if err == nil && ok && s.boundary == "claim" {
+		s.gate(ctx)
+	}
+	return lease, ok, err
+}
+
+func (s *dispatchBoundaryGate) Append(ctx context.Context, lease store.Lease, key effect.AssignmentKey, c ledger.Commit) error {
+	err := s.Store.Append(ctx, lease, key, c)
+	if err == nil && s.boundary == "dispatch_commit" && c.Batches[0].Events[0].Type == store.EventExecutionStarted {
+		s.gate(ctx)
+	}
+	return err
+}
+
+func (s *dispatchBoundaryGate) Load(ctx context.Context, key effect.AssignmentKey) (store.Execution, ledger.Head, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return store.Execution{}, ledger.Head{}, false, err
+	}
+	state, head, ok, err := s.Store.Load(ctx, key)
+	if err == nil && ok && state.State == effect.ExecutionDispatching && s.boundary == "pre_rpc" {
+		s.gate(ctx)
+		if err := ctx.Err(); err != nil {
+			return store.Execution{}, ledger.Head{}, false, err
+		}
+		return s.Store.Load(ctx, key)
+	}
+	return state, head, ok, err
+}
+
+func TestWorkerCloseBeforeStart(t *testing.T) {
+	for _, boundary := range []string{"claim", "dispatch_commit", "pre_rpc"} {
+		t.Run(boundary, func(t *testing.T) {
+			records := &dispatchBoundaryGate{Store: storetest.NewMap(nil), boundary: boundary, entered: make(chan struct{}), release: make(chan struct{})}
+			backend := newControlledBackend()
+			worker, err := executor.NewWorker(context.Background(), records, []executor.Route{executor.Default("test", backend)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			release := sync.OnceFunc(func() { close(records.release) })
+			defer func() { release(); worker.Close() }()
+			dispatched := make(chan struct{})
+			go func() { _ = worker.Dispatch(context.Background(), testToolAssignment()); close(dispatched) }()
+			waitTest(t, records.entered)
+			closed := make(chan struct{})
+			go func() { worker.Close(); close(closed) }()
+			waitTest(t, records.ctx.Done())
+			release()
+			waitTest(t, dispatched)
+			waitTest(t, closed)
+			starts, restarts, _ := backend.counts()
+			if starts != 0 || restarts != 0 {
+				t.Fatalf("closed Worker started/restarted = %d/%d", starts, restarts)
+			}
+		})
 	}
 }

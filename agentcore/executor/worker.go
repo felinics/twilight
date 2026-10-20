@@ -30,9 +30,10 @@ type WorkerOptions struct {
 	// restarted process while an older incarnation could still be alive.
 	ID            string
 	LeaseDuration time.Duration
-	// StartTimeout bounds the synchronous Start RPC, not the external effect's
-	// lifetime. Caller cancellation/deadlines and Close also end this RPC.
-	// Backends must honor the RPC context. Defaults to 30 seconds.
+	// StartTimeout bounds preparation and the synchronous Start RPC separately,
+	// not the external effect's lifetime. Once accepted, preparation survives
+	// caller cancellation; a Start RPC already in flight ends with the caller.
+	// Close ends both. Backends must honor the RPC context. Defaults to 30 seconds.
 	StartTimeout time.Duration
 	// Clock reads the lease clock. It must agree with the Store's clock; the
 	// Store remains the fencing authority. Defaults to time.Now.
@@ -83,7 +84,7 @@ type Worker struct {
 	now          func() time.Time
 	lifecycle    context.Context
 	stop         context.CancelFunc
-	// wg counts heartbeats, watchers and in-flight synchronous Start RPCs.
+	// wg counts preparation, heartbeats, watchers and synchronous Start RPCs.
 	// workMu prevents registration after Close begins waiting.
 	wg      sync.WaitGroup
 	workMu  sync.Mutex
@@ -552,13 +553,16 @@ func (w *Worker) Progress(ctx context.Context, key effect.AssignmentKey, after u
 	if !ok {
 		return effect.ErrExecutionNotFound
 	}
+	// Another replica may have settled this execution. Its local End frame
+	// does not reach our hub or the backend's hub; the durable terminal state
+	// must close a new subscription before we relay to either of them.
+	if state.Terminal() {
+		return nil
+	}
 	if backend, err := w.backend(state.ExecutionRef); err == nil {
 		if relay, ok := backend.(effect.ProgressPort); ok {
 			return relay.Progress(ctx, key, after, fn)
 		}
-	}
-	if state.Terminal() {
-		return nil
 	}
 	return w.progress.Progress(ctx, key, after, fn)
 }
@@ -706,7 +710,7 @@ func (w *Worker) Cancel(ctx context.Context, key effect.AssignmentKey) error {
 		// can have started, so this is a definite cancellation, not Unknown.
 		return w.finishOwned(ctx, executionstore.Lease{Key: key}, &protocol.OutcomeEnvelope{
 			ProtocolVersion: protocol.ProtocolVersion, Key: key, Cancelled: true,
-		}, effect.ExecutionCancelled, nil)
+		}, effect.ExecutionCancelled)
 	}
 	backend, err := w.backend(ref)
 	if err != nil {

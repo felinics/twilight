@@ -29,7 +29,21 @@ import (
 // Unknown (any other tool), one whose execution the backend
 // cannot confirm (orphaned) is held under the lease and asked about again
 // until the backend can, and one never started is started.
-func (w *Worker) acquireAndStart(ctx context.Context, key effect.AssignmentKey) error {
+func (w *Worker) acquireAndStart(caller context.Context, key effect.AssignmentKey) error {
+	if !w.beginWork() {
+		return context.Canceled
+	}
+	defer w.wg.Done()
+	// Acceptance has handed the assignment to the Worker. Ending an
+	// activation must not interrupt local preparation after a lease or
+	// dispatch intent was committed. Bound preparation by this incarnation
+	// and a timeout; the caller still bounds a Start RPC already in flight.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(caller), w.startTimeout)
+	stop := context.AfterFunc(w.lifecycle, cancel)
+	defer func() { stop(); cancel() }()
+	if w.lifecycle.Err() != nil {
+		cancel()
+	}
 	lease, acquired, err := w.store.Acquire(ctx, key, w.id, w.lease)
 	if err != nil {
 		return err
@@ -72,7 +86,7 @@ func (w *Worker) acquireAndStart(ctx context.Context, key effect.AssignmentKey) 
 	if claimed.State == effect.ExecutionCancelRequested && claimed.ExecutionRef.Provider == "" {
 		return w.finishOwned(ctx, lease, &protocol.OutcomeEnvelope{
 			ProtocolVersion: protocol.ProtocolVersion, Key: key, Cancelled: true,
-		}, effect.ExecutionCancelled, nil)
+		}, effect.ExecutionCancelled)
 	}
 	backend, err := w.backend(claimed.ExecutionRef)
 	if err != nil {
@@ -106,9 +120,9 @@ func (w *Worker) acquireAndStart(ctx context.Context, key effect.AssignmentKey) 
 			w.spawn(func() { w.awaitBackend(lease, &held, backend, ref, leaseDone) })
 			return nil
 		}
-		return w.replay(ctx, lease, &claimed, backend, ref, leaseDone)
+		return w.replay(ctx, caller, lease, &claimed, backend, ref, leaseDone)
 	}
-	return w.start(ctx, lease, &claimed, backend, ref, leaseDone)
+	return w.start(ctx, caller, lease, &claimed, backend, ref, leaseDone)
 }
 
 // cancelOwned never prepares, restarts or starts. A persisted binding may
@@ -124,7 +138,7 @@ func (w *Worker) cancelOwned(ctx context.Context, lease executionstore.Lease, ba
 	if attachment.State != effect.AttachmentActive && attachment.State != effect.AttachmentTerminal {
 		env := protocol.OutcomeEnvelope{ProtocolVersion: protocol.ProtocolVersion, Key: lease.Key, Unknown: true,
 			Error: &protocol.WireError{Code: "cancel_reconciliation_unknown", Message: "cancelled execution is no longer attached"}}
-		err := w.finishOwned(ctx, lease, &env, effect.ExecutionUnknown, nil)
+		err := w.finishOwned(ctx, lease, &env, effect.ExecutionUnknown)
 		close(done)
 		return err
 	}
@@ -163,10 +177,9 @@ func (w *Worker) awaitBackend(lease executionstore.Lease, claimed *executionstor
 			w.watch(lease, backend, ref, leaseDone)
 			return
 		case effect.AttachmentMissing:
-			// A failed replay has released the lease (replay closes leaseDone
-			// on every error path), so the execution reads as orphaned again
-			// and the Owner's next recovery request retries it.
-			_ = w.replay(w.lifecycle, lease, claimed, backend, ref, leaseDone)
+			// A failed replay stops the heartbeat. The execution becomes
+			// orphaned after lease expiry, when recovery can retry it.
+			_ = w.replay(w.lifecycle, w.lifecycle, lease, claimed, backend, ref, leaseDone)
 			return
 		}
 	}
@@ -183,11 +196,11 @@ func (w *Worker) awaitBackend(lease executionstore.Lease, claimed *executionstor
 // Ref, just proved missing, moves to the audit trail as execution_restarted
 // leaseDone ends the running heartbeat when nothing is left to
 // watch.
-func (w *Worker) replay(ctx context.Context, lease executionstore.Lease, claimed *executionstore.Execution, backend ExecutionBackend, ref string, leaseDone chan struct{}) error {
+func (w *Worker) replay(ctx, caller context.Context, lease executionstore.Lease, claimed *executionstore.Execution, backend ExecutionBackend, ref string, leaseDone chan struct{}) error {
 	if tool, ok := claimed.Assignment.Tool(); ok && tool.Replay != turn.ReplayAllowed {
 		env := protocol.OutcomeEnvelope{ProtocolVersion: protocol.ProtocolVersion, Key: lease.Key, Unknown: true,
 			Error: &protocol.WireError{Code: "adopted_without_replay", Message: fmt.Sprintf("tool %q declares replay %s; the lost execution is not re-dispatched", tool.ToolRef, tool.Replay)}}
-		err := w.finishOwned(ctx, lease, &env, effect.ExecutionUnknown, nil)
+		err := w.finishOwned(ctx, lease, &env, effect.ExecutionUnknown)
 		close(leaseDone)
 		return err
 	}
@@ -224,7 +237,7 @@ func (w *Worker) replay(ctx context.Context, lease executionstore.Lease, claimed
 		ref = fresh
 		w.progress.Reset(lease.Key)
 	}
-	return w.start(ctx, lease, claimed, backend, ref, leaseDone)
+	return w.start(ctx, caller, lease, claimed, backend, ref, leaseDone)
 }
 
 // restarted commits execution_restarted: from leaves, fresh continues.
@@ -289,6 +302,13 @@ func (w *Worker) callStart(ctx context.Context, backend ExecutionBackend, ref st
 		return fmt.Errorf("%w: %w", effect.ErrDispatchUnknown, context.Canceled)
 	}
 	defer w.wg.Done()
+	// No RPC has been sent yet. A vanished caller cannot revoke a durable
+	// acceptance: start it under the Worker rather than watch a Ref that was
+	// never started. Once sent, cancellation remains uncertain and must never
+	// trigger a blind retry.
+	if ctx.Err() != nil {
+		ctx = w.lifecycle
+	}
 	rpc, cancel := context.WithTimeout(ctx, w.startTimeout)
 	stop := context.AfterFunc(w.lifecycle, cancel)
 	defer func() { stop(); cancel() }()
@@ -296,6 +316,11 @@ func (w *Worker) callStart(ctx context.Context, backend ExecutionBackend, ref st
 		cancel()
 	}
 	if err := rpc.Err(); err != nil {
+		// The caller may have ended while the RPC context was being built.
+		// We still have not invoked Start, so transfer this request too.
+		if ctx.Err() != nil && w.lifecycle.Err() == nil {
+			return w.callStart(w.lifecycle, backend, ref, a)
+		}
 		return fmt.Errorf("%w: %w", effect.ErrDispatchUnknown, err)
 	}
 	err := backend.Start(rpc, ref, a)
@@ -311,7 +336,7 @@ func (w *Worker) callStart(ctx context.Context, backend ExecutionBackend, ref st
 // start moves the execution through Dispatching to Running around
 // Backend.Start and hands it to a watcher; the heartbeat leaseDone ends is
 // already running.
-func (w *Worker) start(ctx context.Context, lease executionstore.Lease, claimed *executionstore.Execution, backend ExecutionBackend, ref string, leaseDone chan struct{}) error {
+func (w *Worker) start(ctx, caller context.Context, lease executionstore.Lease, claimed *executionstore.Execution, backend ExecutionBackend, ref string, leaseDone chan struct{}) error {
 	key := lease.Key
 	if err := w.beginStart(ctx, lease, ref); err != nil {
 		// A cancelling execution with a physical Ref remains observable.
@@ -324,15 +349,28 @@ func (w *Worker) start(ctx context.Context, lease executionstore.Lease, claimed 
 		close(leaseDone)
 		return err
 	}
-	if err := w.callStart(ctx, backend, ref, claimed.Assignment); err != nil {
-		if errors.Is(err, effect.ErrDispatchUnknown) {
+	startErr := w.callStart(caller, backend, ref, claimed.Assignment)
+	// Preparation's deadline does not bound recording the RPC's result.
+	// The Worker owns this continuation and keeps its lease until settlement.
+	ctx = w.lifecycle
+	if startErr != nil {
+		if errors.Is(startErr, effect.ErrDispatchUnknown) {
 			w.spawn(func() { w.watch(lease, backend, ref, leaseDone) })
+			return startErr
+		}
+		env := protocol.OutcomeEnvelope{ProtocolVersion: protocol.ProtocolVersion, Key: key,
+			Error: &protocol.WireError{Code: "dispatch_failed", Message: startErr.Error()}}
+		if err := w.finishOwned(ctx, lease, &env, effect.ExecutionFailed); err != nil {
+			// Retry only the known rejection's settlement, never Start or an
+			// Outcome read of a Ref the backend definitively refused to run.
+			w.spawn(func() {
+				defer close(leaseDone)
+				w.settleWithRetry(lease, &env, effect.ExecutionFailed, 10*time.Millisecond)
+			})
 			return err
 		}
-		settleErr := w.finishOwned(ctx, lease, &protocol.OutcomeEnvelope{ProtocolVersion: protocol.ProtocolVersion, Key: key,
-			Error: &protocol.WireError{Code: "dispatch_failed", Message: err.Error()}}, effect.ExecutionFailed, err)
 		close(leaseDone)
-		return settleErr
+		return startErr
 	}
 	if err := w.commit(ctx, lease, key, w.transition(lease, executionstore.EventExecutionRunning, effect.ExecutionRunning, "run")); err != nil {
 		// The backend call may already have crossed its external boundary.
@@ -435,7 +473,7 @@ func (w *Worker) observe(lease executionstore.Lease, backend ExecutionBackend, r
 // while this Worker still owns the record.
 func (w *Worker) settleWithRetry(lease executionstore.Lease, env *protocol.OutcomeEnvelope, state effect.ExecutionStatus, delay time.Duration) {
 	for {
-		if err := w.finishOwned(w.lifecycle, lease, env, state, nil); err == nil {
+		if err := w.finishOwned(w.lifecycle, lease, env, state); err == nil {
 			return
 		}
 		if !w.waitOwned(lease, delay) {
@@ -510,7 +548,7 @@ func (w *Worker) retryAfter(lease executionstore.Lease, backend ExecutionBackend
 	if err := w.callStart(ctx, backend, fresh, state.Assignment); err != nil {
 		if !errors.Is(err, effect.ErrDispatchUnknown) {
 			_ = w.finishOwned(ctx, lease, &protocol.OutcomeEnvelope{ProtocolVersion: protocol.ProtocolVersion, Key: lease.Key,
-				Error: &protocol.WireError{Code: "dispatch_failed", Message: err.Error()}}, effect.ExecutionFailed, nil)
+				Error: &protocol.WireError{Code: "dispatch_failed", Message: err.Error()}}, effect.ExecutionFailed)
 		}
 		return fresh, true
 	}
@@ -594,9 +632,8 @@ func (w *Worker) heartbeat(lease executionstore.Lease, done <-chan struct{}) {
 
 // finishOwned settles the execution under lease. A settlement another writer
 // made first (a Dispose, or a watcher of a later Epoch) is the execution's;
-// this one is dropped and dispatchErr, the error the caller was going to
-// report, is returned as it was.
-func (w *Worker) finishOwned(ctx context.Context, lease executionstore.Lease, outcome *protocol.OutcomeEnvelope, state effect.ExecutionStatus, dispatchErr error) error {
+// this one is dropped without changing the settled outcome.
+func (w *Worker) finishOwned(ctx context.Context, lease executionstore.Lease, outcome *protocol.OutcomeEnvelope, state effect.ExecutionStatus) error {
 	err := w.commit(ctx, lease, lease.Key, func(current *executionstore.Execution, _ ledger.Head) (*ledger.Commit, error) {
 		if current.Terminal() {
 			return nil, nil
@@ -606,11 +643,11 @@ func (w *Worker) finishOwned(ctx context.Context, lease executionstore.Lease, ou
 	switch {
 	case err == nil:
 	case errors.Is(err, executionstore.ErrLeaseLost):
-		return dispatchErr
+		return nil
 	default:
 		return err
 	}
 	w.progress.End(lease.Key)
 	w.settled(lease.Key)
-	return dispatchErr
+	return nil
 }
