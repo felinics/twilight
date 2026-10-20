@@ -52,7 +52,9 @@ type Store struct {
 	// verified against log.jsonl (index.go). It is keyed to the log's size and
 	// mtime: any change by another instance (append, takeover, truncation)
 	// invalidates it and the next use reloads it.
-	index map[session.SegmentID]*segIndex
+	index       map[session.SegmentID]*segIndex
+	headers     fileCache[session.SegmentHeader]
+	projections fileCache[cachedProjection]
 	// sync persists an appended commit; tests inject a failing one to exercise
 	// the unknown-outcome path of. nil means (*os.File).Sync.
 	sync func(*os.File) error
@@ -152,7 +154,7 @@ func readHeader(dir string) (session.SegmentHeader, error) {
 // lock.
 func (s *Store) loadSegment(id session.SegmentID, op string) (session.SegmentHeader, string, error) {
 	dir := s.segmentDir(id)
-	h, err := readHeader(dir)
+	h, err := s.headers.load(filepath.Join(dir, headerFile), decodeHeader)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return session.SegmentHeader{}, "", &session.Error{Code: session.ErrNotFound, Operation: op, Detail: fmt.Sprintf("segment %s not found", id)}
@@ -167,6 +169,12 @@ func (s *Store) loadSegment(id session.SegmentID, op string) (session.SegmentHea
 	if err := h.Validate(); err != nil {
 		return session.SegmentHeader{}, "", err
 	}
+	// The cache owns its record; callers can freely mutate returned headers.
+	if h.Parent != nil {
+		edge := *h.Parent
+		h.Parent = &edge
+	}
+	h.Ext = h.Ext.Clone()
 	return h, dir, nil
 }
 

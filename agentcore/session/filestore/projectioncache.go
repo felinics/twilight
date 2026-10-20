@@ -33,21 +33,12 @@ type projectionRecord struct {
 type projectionCache struct{ store *Store }
 
 func (c projectionCache) Load(_ context.Context, sid session.SessionID, id module.ProjectionID, v module.ProjectionVersion) (jsonstable.Value, ledger.Head, bool, error) {
-	raw, err := os.ReadFile(projectionPath(c.store, sid, id, v))
+	entry, err := c.store.projections.load(projectionPath(c.store, sid, id, v), decodeProjection)
 	if err != nil {
-		// A missing or unreadable entry is a cache miss, not a failure: the
-		// reader falls back to folding from the beginning.
+		// Missing, unreadable and corrupt derived entries remain cache misses.
 		return jsonstable.Value{}, ledger.Head{}, false, nil
 	}
-	var rec projectionRecord
-	if err := json.Unmarshal(raw, &rec); err != nil {
-		return jsonstable.Value{}, ledger.Head{}, false, nil
-	}
-	state, err := jsonstable.Parse(rec.State)
-	if err != nil {
-		return jsonstable.Value{}, ledger.Head{}, false, nil
-	}
-	return state, rec.Through, true, nil
+	return entry.state, entry.through, true, nil
 }
 
 // Save keeps the entry monotonic: a write that lands after a
