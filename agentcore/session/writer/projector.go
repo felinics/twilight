@@ -3,6 +3,7 @@ package writer
 import (
 	"context"
 	"fmt"
+	"github.com/felinics/twilight/agentcore/jsonstable"
 	"github.com/felinics/twilight/agentcore/ledger"
 	"github.com/felinics/twilight/agentcore/module"
 	"github.com/felinics/twilight/agentcore/session"
@@ -23,8 +24,12 @@ type projectionKey struct {
 type projector struct {
 	registry *module.Registry
 	sid      session.SessionID
-	states   map[projectionKey]any
-	scopes   map[projectionKey]*module.ProjectionScope
+	// encoded holds at most one immutable encoding per opted-in projection.
+	// Like states, it is protected by the Writer's lock and invalidated when
+	// that projection advances. Reads always Decode a fresh detached value.
+	encoded map[projectionKey]jsonstable.Value
+	states  map[projectionKey]any
+	scopes  map[projectionKey]*module.ProjectionScope
 	// unhealthy records derived projections that failed to fold an applied
 	// commit: their state stays at the last good commit, reads
 	// report the failure and the cache is not refreshed for them.
@@ -46,7 +51,7 @@ func newProjector(registry *module.Registry, sid session.SessionID, cache sessio
 	}
 	return &projector{registry: registry, sid: sid, states: make(map[projectionKey]any), unhealthy: make(map[projectionKey]error),
 		scopes: make(map[projectionKey]*module.ProjectionScope), cache: cache, policy: policy, cached: make(map[projectionKey]ledger.Head),
-		starts: make(map[projectionKey]ledger.CommitSeq)}
+		starts: make(map[projectionKey]ledger.CommitSeq), encoded: make(map[projectionKey]jsonstable.Value)}
 }
 
 // commitAt reads the commit at one stitched position of the Session, for
@@ -75,6 +80,7 @@ func (p *projector) prepare(ctx context.Context, header session.SegmentHeader, a
 			return 0, err
 		}
 		p.states[k] = state
+		delete(p.encoded, k)
 		p.starts[k] = start
 		if start < from {
 			from = start
@@ -108,6 +114,7 @@ func (p *projector) resume(page *session.CommitPage, from ledger.CommitSeq) erro
 			p.unhealthy[k] = err
 		}
 		p.states[k] = folded
+		delete(p.encoded, k)
 	}
 	return nil
 }
@@ -156,11 +163,18 @@ func coversCommit(header session.SegmentHeader, through ledger.Head, at commitAt
 	return ok && ledger.CommitAt(c, through)
 }
 
+type foldedState struct {
+	value any
+	// A commit with no consumed events leaves this projection unchanged,
+	// even though Fold must still check unknown in-scope events.
+	invalidate bool
+}
+
 // folded is what fold produced: the next states and, for derived
 // projections that could not fold the commit, the failure to record once
 // the commit is durable.
 type folded struct {
-	next   map[projectionKey]any
+	next   map[projectionKey]foldedState
 	failed map[projectionKey]error
 }
 
@@ -170,7 +184,7 @@ type folded struct {
 // marked unhealthy once the commit lands. A projection already
 // unhealthy is not folded further.
 func (p *projector) fold(provisional ledger.Commit) (folded, error) {
-	out := folded{next: make(map[projectionKey]any, len(p.states))}
+	out := folded{next: make(map[projectionKey]foldedState, len(p.states))}
 	for k, scope := range p.scopes {
 		if _, down := p.unhealthy[k]; down {
 			continue
@@ -186,18 +200,38 @@ func (p *projector) fold(provisional ledger.Commit) (folded, error) {
 			out.failed[k] = err
 			continue
 		}
-		out.next[k] = state
+		_, encoded := p.encoded[k]
+		out.next[k] = foldedState{value: state, invalidate: encoded && consumesCommit(scope, provisional)}
 	}
 	return out, nil
+}
+
+// consumesCommit is only an encoding invalidation check; it never replaces
+// Registry.Fold, whose scope checks also apply to events not consumed here.
+func consumesCommit(scope *module.ProjectionScope, commit ledger.Commit) bool {
+	for _, batch := range commit.Batches {
+		for _, event := range batch.Events {
+			for _, typ := range scope.Def.Consumes {
+				if event.Type == typ {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // advance installs what fold produced for a commit that is now durable.
 func (p *projector) advance(f folded) {
 	for k, s := range f.next {
-		p.states[k] = s
+		p.states[k] = s.value
+		if s.invalidate {
+			delete(p.encoded, k)
+		}
 	}
 	for k, err := range f.failed {
 		p.unhealthy[k] = err
+		delete(p.encoded, k)
 	}
 }
 
@@ -212,9 +246,16 @@ func (p *projector) detached(id module.ProjectionID, ver module.ProjectionVersio
 		return nil, &ledger.Error{Code: ledger.CodeProjectionUnhealthy, Detail: fmt.Sprintf("projection %q v%d: %v", id, ver, err)}
 	}
 	codec := p.scopes[k].Def.StateCodec
-	encoded, err := codec.Encode(state)
-	if err != nil {
-		return nil, err
+	encoded, ok := p.encoded[k]
+	if !ok {
+		var err error
+		encoded, err = codec.Encode(state)
+		if err != nil {
+			return nil, err
+		}
+		if c, ok := codec.(module.StateEncodingCacheable); ok && c.CacheStateEncoding() {
+			p.encoded[k] = encoded
+		}
 	}
 	return codec.Decode(encoded)
 }

@@ -167,7 +167,7 @@ type sealedCheckpoint struct {
 
 // checkpointDigest is the digest a required-for-commit entry must carry.
 func checkpointDigest(id ProjectionID, v ProjectionVersion, through ledger.Head, state jsonstable.Value) jsonstable.Digest {
-	preimage, _ := jsonstable.EncodeTypedPayload(1, checkpointDomain, []string{string(id), fmt.Sprint(uint64(v)), fmt.Sprint(uint64(through.Next)), string(state.Bytes())})
+	preimage, _ := jsonstable.EncodeTypedPayload(1, checkpointDomain, []string{string(id), fmt.Sprint(uint64(v)), fmt.Sprint(uint64(through.Next)), state.String()})
 	return jsonstable.DigestBytes(preimage)
 }
 
@@ -182,7 +182,7 @@ func SealCheckpoint(id ProjectionID, v ProjectionVersion, through ledger.Head, s
 // through, and the caller treats it as absent.
 func OpenCheckpoint(id ProjectionID, v ProjectionVersion, through ledger.Head, sealed jsonstable.Value) (jsonstable.Value, bool) {
 	var c sealedCheckpoint
-	if err := json.Unmarshal(sealed.Bytes(), &c); err != nil || len(c.State) == 0 || c.Digest == "" {
+	if err := sealed.Decode(&c); err != nil || len(c.State) == 0 || c.Digest == "" {
 		return jsonstable.Value{}, false
 	}
 	state, err := jsonstable.Parse(c.State)
@@ -258,8 +258,25 @@ func (p CachePolicy) Exclude(ids ...ProjectionID) CachePolicy {
 	}
 }
 
+// StateEncodingCacheable optionally lets a Writer reuse a successful state
+// encoding until the next committed fold. Encode must depend only on its input
+// state; it must not perform side effects or depend on external mutable data.
+// Decode is still called on every read to give the caller an independent copy.
+// The opt-in must remain fixed for the codec's lifetime. Codecs that do not
+// implement this interface keep encoding on every read.
+type StateEncodingCacheable interface {
+	CacheStateEncoding() bool
+}
+
 // JSONStateCodec is a StateCodec for projection states that marshal to JSON.
+// State encodings may be reused between committed folds. Any custom JSON
+// marshaler in T must therefore be deterministic and free of side effects.
 type JSONStateCodec[T any] struct{}
+
+// CacheStateEncoding opts into reuse of deterministic JSON state encodings.
+// Wrappers adding side effects or external dependencies to Encode must override
+// this method to return false.
+func (JSONStateCodec[T]) CacheStateEncoding() bool { return true }
 
 func (JSONStateCodec[T]) Validate(value any) error {
 	if _, ok := value.(T); !ok {
