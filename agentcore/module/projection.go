@@ -18,6 +18,13 @@ type ProjectionDefinition struct {
 	Initial    func() (any, error)
 	Apply      func(any, DecodedEvent) (any, error)
 	StateCodec PayloadCodec
+	// CloneState optionally detaches an in-memory state without a codec round
+	// trip. It must preserve the codec's read semantics, normalization and
+	// validation, return all failures, and share no caller-mutable containers
+	// with its input. It must be deterministic and never mutate the source.
+	// Only Writer-local reads use this hook; persistence always uses StateCodec.
+	// Nil retains Encode/Decode, including custom codec behavior.
+	CloneState func(any) (any, error)
 	// InheritanceOverride decides which batches from an inherited prefix this
 	// projection folds. A nil override follows the owning stream domain's
 	// Inheritance declaration. InheritAll and InheritNone override it for every

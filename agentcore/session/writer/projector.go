@@ -26,7 +26,7 @@ type projector struct {
 	sid      session.SessionID
 	// encoded holds at most one immutable encoding per opted-in projection.
 	// Like states, it is protected by the Writer's lock and invalidated when
-	// that projection advances. Reads always Decode a fresh detached value.
+	// that projection advances. Codec-based reads always Decode a fresh detached value.
 	encoded map[projectionKey]jsonstable.Value
 	states  map[projectionKey]any
 	scopes  map[projectionKey]*module.ProjectionScope
@@ -245,7 +245,11 @@ func (p *projector) detached(id module.ProjectionID, ver module.ProjectionVersio
 	if err, down := p.unhealthy[k]; down {
 		return nil, &ledger.Error{Code: ledger.CodeProjectionUnhealthy, Detail: fmt.Sprintf("projection %q v%d: %v", id, ver, err)}
 	}
-	codec := p.scopes[k].Def.StateCodec
+	def := &p.scopes[k].Def
+	if def.CloneState != nil {
+		return def.CloneState(state)
+	}
+	codec := def.StateCodec
 	encoded, ok := p.encoded[k]
 	if !ok {
 		var err error

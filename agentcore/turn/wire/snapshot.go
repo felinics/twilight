@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
+	"unicode/utf8"
 
 	"github.com/felinics/twilight/agentcore/jsonstable"
 	"github.com/felinics/twilight/agentcore/preset/ref"
@@ -139,4 +142,109 @@ func decodeMachineState(raw []byte) (turn.MachineState, error) {
 		return turn.MachineState{}, err
 	}
 	return s, nil
+}
+
+// Clone returns the same detached semantic state as a snapshot round trip,
+// without serializing it. It is for trusted in-memory projection states;
+// persisted bytes must still pass Decode and its canonical wire checks.
+func (Snapshot) Clone(s *turn.MachineState) (turn.MachineState, error) {
+	// Ordinary folded states already contain valid UTF-8 and safe integers.
+	// Retain the codec's exact behavior for unusual programmatically built
+	// states: JSON repairs invalid UTF-8 and JCS may round large integers.
+	if s != nil && snapshotNeedsWire(reflect.ValueOf(s)) {
+		raw, err := encodeMachineState(s)
+		if err != nil {
+			return turn.MachineState{}, err
+		}
+		return decodeMachineState(raw)
+	}
+	if err := turn.ValidateMachineState(s); err != nil {
+		return turn.MachineState{}, err
+	}
+	out := *s
+	out.PendingInputs = slices.Clone(s.PendingInputs)
+	if s.Result != nil {
+		result := *s.Result
+		// omitempty fields decode to nil when empty.
+		if len(result.UncertainCalls) == 0 {
+			result.UncertainCalls = nil
+		} else {
+			result.UncertainCalls = slices.Clone(result.UncertainCalls)
+		}
+		if result.Failure != nil {
+			failure := *result.Failure
+			result.Failure = &failure
+		}
+		out.Result = &result
+	}
+	if s.LastToolStep != nil {
+		last := cloneSnapshotToolStep(*s.LastToolStep)
+		out.LastToolStep = &last
+	}
+	switch current := s.Current.(type) {
+	case turn.ModelStep:
+		if len(current.Tools) == 0 {
+			current.Tools = nil
+		} else {
+			current.Tools = slices.Clone(current.Tools)
+		}
+		out.Current = current
+	case turn.ToolStep:
+		out.Current = cloneSnapshotToolStep(current)
+	}
+	return out, nil
+}
+
+//nolint:gocritic // hugeParam: copy the value before detaching its containers.
+func cloneSnapshotToolStep(step turn.ToolStep) turn.ToolStep {
+	step.Calls = slices.Clone(step.Calls)
+	for i := range step.Calls {
+		call := &step.Calls[i]
+		// Arguments is required on the wire, so an absent Value becomes null.
+		if call.Arguments.IsZero() {
+			call.Arguments = jsonstable.MustParse("null")
+		}
+		if call.Result != nil {
+			result := *call.Result
+			call.Result = &result
+		}
+		if call.Failure != nil {
+			failure := *call.Failure
+			call.Failure = &failure
+		}
+		call.Waiting = turn.CloneResponseRequest(call.Waiting)
+	}
+	return step
+}
+
+// snapshotNeedsWire only checks scalars JSON could change. Immutable Values
+// have already passed canonicalization and must not be traversed or copied.
+func snapshotNeedsWire(value reflect.Value) bool {
+	if value.Type() == reflect.TypeFor[jsonstable.Value]() {
+		return false
+	}
+	switch value.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		return !value.IsNil() && snapshotNeedsWire(value.Elem())
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			if snapshotNeedsWire(value.Field(i)) {
+				return true
+			}
+		}
+	case reflect.Slice:
+		for i := 0; i < value.Len(); i++ {
+			if snapshotNeedsWire(value.Index(i)) {
+				return true
+			}
+		}
+	case reflect.String:
+		return !utf8.ValidString(value.String())
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		n := value.Int()
+		return n < -(1<<53-1) || n >= 1<<53
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return value.Uint() >= 1<<53
+	}
+	return false
 }

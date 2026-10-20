@@ -11,6 +11,7 @@ import (
 	"github.com/felinics/twilight/agentcore/turn/schema"
 	"github.com/felinics/twilight/agentcore/turn/store"
 	"github.com/felinics/twilight/agentcore/turn/wire"
+	"unicode/utf8"
 )
 
 const MachineProjectionID module.ProjectionID = "twilight/turn/machine"
@@ -163,6 +164,7 @@ var MachineProjection = module.ProjectionDefinition{
 		return m.Apply(e)
 	},
 	StateCodec: machineCodec{},
+	CloneState: cloneMachine,
 }
 
 var _ ledger.EventType = Prefix
@@ -174,4 +176,36 @@ var _ ledger.EventType = Prefix
 // commits; zero or less takes module.DefaultCacheEvery.
 func WriterCachePolicy(every ledger.CommitSeq) module.CachePolicy {
 	return module.CacheEvery(every).Exclude(MachineProjectionID)
+}
+
+// cloneMachine only copies active turns, like machineCodec's wire round trip.
+// Positions without a corresponding active turn are not part of that encoding.
+func cloneMachine(value any) (any, error) {
+	codec := machineCodec{}
+	if err := codec.Validate(value); err != nil {
+		return nil, err
+	}
+	m, _ := value.(Machine) // Validate checked the type
+	// The outer codec also normalizes map keys and positions. Preserve that
+	// behavior for unusual programmatically constructed states.
+	for id := range m.Active {
+		if !utf8.ValidString(string(id)) || m.Positions[id] >= 1<<53 {
+			encoded, err := codec.Encode(value)
+			if err != nil {
+				return nil, err
+			}
+			return codec.Decode(encoded)
+		}
+	}
+	out := newMachine()
+	for id := range m.Active {
+		state := m.Active[id]
+		detached, err := schema.Snapshot().Clone(&state)
+		if err != nil {
+			return nil, err
+		}
+		out.Active[id] = detached
+		out.Positions[id] = m.Positions[id]
+	}
+	return out, nil
 }
