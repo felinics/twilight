@@ -137,7 +137,6 @@ func Canonicalize(raw []byte) ([]byte, error) {
 }
 
 // MarshalCanonical marshals a Go value and canonicalizes its JSON wire form.
-// This is the single path from protocol values to digest input.
 func MarshalCanonical(v any) ([]byte, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {

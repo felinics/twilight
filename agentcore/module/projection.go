@@ -189,7 +189,9 @@ func SealCheckpoint(id ProjectionID, v ProjectionVersion, through ledger.Head, s
 // through, and the caller treats it as absent.
 func OpenCheckpoint(id ProjectionID, v ProjectionVersion, through ledger.Head, sealed jsonstable.Value) (jsonstable.Value, bool) {
 	var c sealedCheckpoint
-	if err := sealed.Decode(&c); err != nil || len(c.State) == 0 || c.Digest == "" {
+	// This fixed envelope has no interface-valued numbers. Unmarshal avoids
+	// the streaming decoder's growing buffer for the embedded state.
+	if err := json.Unmarshal(sealed.Bytes(), &c); err != nil || len(c.State) == 0 || c.Digest == "" {
 		return jsonstable.Value{}, false
 	}
 	state, err := jsonstable.Parse(c.State)
