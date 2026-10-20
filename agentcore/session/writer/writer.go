@@ -200,6 +200,18 @@ func (w *sessionWriter) OwnerExists(_ context.Context, owner artifact.ClaimOwner
 	return w.kernel.Committed(ledger.CommitID(owner.Identity))
 }
 
+// LookupCommit reads authoritative stored facts through the acquired handle's
+// commit index. It is an optional read capability; it never evaluates a
+// command, appends, or returns a retained local CommitResult.
+func (w *sessionWriter) LookupCommit(id ledger.CommitID) (ledger.Commit, bool, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.lost != nil {
+		return ledger.Commit{}, false, w.lost
+	}
+	return w.kernel.LookupCommit(id)
+}
+
 // errWriterClosed is the failure a closed Writer keeps returning.
 var errWriterClosed = &ledger.Error{Code: ledger.CodeInvalid, Detail: "writer closed"}
 
