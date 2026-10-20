@@ -5,6 +5,7 @@
 package canonicaljson
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"unicode/utf8"
@@ -32,6 +33,12 @@ var ErrInvalid = errors.New("twilightai: not a canonical-encodable JSON document
 func Transform(raw []byte) ([]byte, error) {
 	if !utf8.Valid(raw) {
 		return nil, fmt.Errorf("%w: invalid UTF-8", ErrInvalid)
+	}
+	// Already canonical documents need validation, not reconstruction. The
+	// conservative scanner accepts only forms whose JCS representation is
+	// identical; everything else retains the original canonicalizer.
+	if isCanonical(raw) {
+		return bytes.Clone(raw), nil
 	}
 	if err := rejectEscapedLoneSurrogates(raw); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)

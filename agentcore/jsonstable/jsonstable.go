@@ -35,7 +35,8 @@ func Parse(raw []byte) (Value, error) {
 	if err != nil {
 		return Value{}, err
 	}
-	return Value{raw: append([]byte(nil), canonical...)}, nil
+	// Canonicalize returns detached bytes, which this immutable Value owns.
+	return Value{raw: canonical}, nil
 }
 
 // MustParse is a convenience for tests and package-level constants.
@@ -75,22 +76,35 @@ func (v Value) RawMessage() json.RawMessage {
 	return json.RawMessage(v.Bytes())
 }
 
-func (v Value) String() string { return string(v.Bytes()) }
+func (v Value) String() string {
+	if len(v.raw) == 0 {
+		return "null"
+	}
+	return string(v.raw)
+}
 
 // IsZero reports whether v is absent. It is used by encoding/json's omitzero
 // tag; a present JSON null is not zero because its raw bytes are "null".
 func (v Value) IsZero() bool { return len(v.raw) == 0 }
 
-func (v Value) Equal(other Value) bool { return bytes.Equal(v.Bytes(), other.Bytes()) }
+func (v Value) Equal(other Value) bool { return bytes.Equal(v.encoded(), other.encoded()) }
+
+// encoded is private: callers of public byte accessors always get copies.
+func (v Value) encoded() []byte {
+	if len(v.raw) == 0 {
+		return []byte("null")
+	}
+	return v.raw
+}
 
 func (v Value) Decode(dst any) error {
-	dec := json.NewDecoder(bytes.NewReader(v.Bytes()))
+	dec := json.NewDecoder(bytes.NewReader(v.encoded()))
 	dec.UseNumber()
 	return dec.Decode(dst)
 }
 
 func (v Value) Any() (any, error) {
-	dec := json.NewDecoder(bytes.NewReader(v.Bytes()))
+	dec := json.NewDecoder(bytes.NewReader(v.encoded()))
 	dec.UseNumber()
 	var out any
 	if err := dec.Decode(&out); err != nil {
