@@ -30,19 +30,21 @@ type Work struct {
 // the maximum (which could acknowledge work a stale projection has not seen).
 // Hosts re-scan; only the Writer's transactional view decides semantic changes.
 func Inspect(ctx context.Context, reader session.ProjectionReader, sid session.SessionID) (Work, error) {
-	value, head, err := reader.Load(ctx, sid, sessionstore.MachineProjectionID, sessionstore.MachineProjection.Version)
+	states, err := session.LoadProjections(ctx, reader, sid,
+		session.ProjectionRef{ID: sessionstore.MachineProjectionID, Version: sessionstore.MachineProjection.Version},
+		session.ProjectionRef{ID: chatlog.SurfaceProjectionID, Version: chatlog.SurfaceProjection.Version},
+		session.ProjectionRef{ID: compaction.ProjectionID, Version: compaction.Projection.Version},
+	)
 	if err != nil {
 		return Work{}, err
 	}
+	value, head := states[0].State, states[0].Through
 	machine, ok := value.(sessionstore.Machine)
 	if !ok {
 		return Work{}, fmt.Errorf("runtime: machine projection is %T", value)
 	}
 	work := Work{Revision: uint64(head.Next)}
-	value, head, err = reader.Load(ctx, sid, chatlog.SurfaceProjectionID, chatlog.SurfaceProjection.Version)
-	if err != nil {
-		return Work{}, err
-	}
+	value, head = states[1].State, states[1].Through
 	work.Revision = min(work.Revision, uint64(head.Next))
 	chat, ok := value.(chatlog.Surface)
 	if !ok {
@@ -64,10 +66,7 @@ func Inspect(ctx context.Context, reader session.ProjectionReader, sid session.S
 		}
 		work.Responses = append(work.Responses, turn.WaitingCalls(state)...)
 	}
-	value, head, err = reader.Load(ctx, sid, compaction.ProjectionID, compaction.Projection.Version)
-	if err != nil {
-		return Work{}, err
-	}
+	value, head = states[2].State, states[2].Through
 	work.Revision = min(work.Revision, uint64(head.Next))
 	maintenance, ok := value.(compaction.State)
 	if !ok {

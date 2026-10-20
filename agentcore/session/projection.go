@@ -142,62 +142,137 @@ func NewProjectionReader(store Store, registry *module.Registry, cache Projectio
 	return &storeReader{store: store, registry: registry, cache: cache}
 }
 
-func (r *storeReader) Load(ctx context.Context, sid SessionID, id module.ProjectionID, v module.ProjectionVersion) (any, ledger.Head, error) {
-	scope, err := r.registry.ScopeFor(id, v)
-	if err != nil {
-		return nil, ledger.Head{}, err
-	}
-	state, from, err := r.startState(ctx, sid, scope)
-	if err != nil {
-		return nil, ledger.Head{}, err
-	}
-	page, err := r.store.ReadCommits(ctx, CommitReadRequest{SessionID: sid, From: from.Next})
-	if err != nil {
-		return nil, ledger.Head{}, err
-	}
-	if from.Next > 0 && !ledger.OwnBoundary(page.Header.Seed(), from) {
-		// The tip moved between the two reads and the entry's
-		// boundary is inherited by the new tip: it was folded under the old
-		// tip's inheritance policy, so the whole log is folded under this
-		// read's header instead.
-		if state, err = scope.Def.Initial(); err != nil {
-			return nil, ledger.Head{}, err
-		}
-		if page, err = r.store.ReadCommits(ctx, CommitReadRequest{SessionID: sid}); err != nil {
-			return nil, ledger.Head{}, err
-		}
-	}
-	state, err = r.registry.FoldFrom(scope, state, page.Commits, page.Header.Seed())
-	if err != nil {
-		return nil, ledger.Head{}, err
-	}
-	return state, page.Head, nil
+// ProjectionRef identifies one projection version in a grouped read.
+type ProjectionRef struct {
+	ID      module.ProjectionID
+	Version module.ProjectionVersion
 }
 
-// startState returns the cached state when its Through is a prefix of the
-// stream; otherwise the projection's initial state and the empty head.
-func (r *storeReader) startState(ctx context.Context, sid SessionID, scope *module.ProjectionScope) (any, ledger.Head, error) {
-	if r.cache != nil {
-		encoded, through, ok, err := LoadProjectionEntry(ctx, r.cache, &scope.Def, sid)
+// ProjectionState carries a detached projection and its observed ledger head.
+type ProjectionState struct {
+	State   any
+	Through ledger.Head
+}
+
+// LoadProjections shares a log read when the reader supports grouped reads.
+// Other readers retain their ordinary Load semantics, including distinct heads.
+func LoadProjections(ctx context.Context, reader ProjectionReader, sid SessionID, refs ...ProjectionRef) ([]ProjectionState, error) {
+	if grouped, ok := reader.(interface {
+		LoadMany(context.Context, SessionID, []ProjectionRef) ([]ProjectionState, error)
+	}); ok {
+		return grouped.LoadMany(ctx, sid, refs)
+	}
+	out := make([]ProjectionState, len(refs))
+	for i, ref := range refs {
+		state, through, err := reader.Load(ctx, sid, ref.ID, ref.Version)
 		if err != nil {
-			return nil, ledger.Head{}, err
+			return nil, err
 		}
-		if ok && through.Next > 0 && r.isPrefix(ctx, sid, through) {
-			if state, err := scope.Def.StateCodec.Decode(encoded); err == nil {
-				return state, through, nil
+		out[i] = ProjectionState{State: state, Through: through}
+	}
+	return out, nil
+}
+
+func (r *storeReader) Load(ctx context.Context, sid SessionID, id module.ProjectionID, v module.ProjectionVersion) (any, ledger.Head, error) {
+	states, err := r.LoadMany(ctx, sid, []ProjectionRef{{ID: id, Version: v}})
+	if err != nil {
+		return nil, ledger.Head{}, err
+	}
+	return states[0].State, states[0].Through, nil
+}
+
+// LoadMany decodes each checkpoint independently, then reads the earliest
+// boundary and shared tail once. The boundary is included in that same read:
+// validation and replay therefore use the same tip and observed head. Nothing
+// is retained between calls or shared with a Writer's transactional state.
+func (r *storeReader) LoadMany(ctx context.Context, sid SessionID, refs []ProjectionRef) ([]ProjectionState, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	type start struct {
+		scope   *module.ProjectionScope
+		state   any
+		through ledger.Head
+		cached  bool
+	}
+	starts := make([]start, len(refs))
+	from := ^ledger.CommitSeq(0)
+	for i, ref := range refs {
+		scope, err := r.registry.ScopeFor(ref.ID, ref.Version)
+		if err != nil {
+			return nil, err
+		}
+		s := &starts[i]
+		s.scope = scope
+		if r.cache != nil {
+			encoded, through, ok, err := LoadProjectionEntry(ctx, r.cache, &scope.Def, sid)
+			if err != nil {
+				return nil, err
+			}
+			if ok && through.Next > 0 {
+				if state, err := scope.Def.StateCodec.Decode(encoded); err == nil {
+					s.state, s.through, s.cached = state, through, true
+				}
+			}
+		}
+		next := ledger.CommitSeq(0)
+		if s.cached {
+			next = s.through.Next - 1
+		}
+		from = min(from, next)
+	}
+	page, err := r.store.ReadCommits(ctx, CommitReadRequest{SessionID: sid, From: from})
+	if err != nil {
+		return nil, err
+	}
+	for i := range starts {
+		s := &starts[i]
+		if !s.cached {
+			continue
+		}
+		boundary := s.through.Next - 1
+		offset := IndexWithin(boundary-from, len(page.Commits))
+		if !ledger.OwnBoundary(page.Header.Seed(), s.through) || offset >= len(page.Commits) || !ledger.CommitAt(page.Commits[offset], s.through) {
+			s.cached = false
+		}
+	}
+	// A stale, inherited or ahead-of-log checkpoint needs the full history.
+	// Validate all other checkpoints again under the replacement page's tip.
+	if from > 0 {
+		for i := range starts {
+			if !starts[i].cached {
+				page, err = r.store.ReadCommits(ctx, CommitReadRequest{SessionID: sid})
+				if err != nil {
+					return nil, err
+				}
+				from = 0
+				break
 			}
 		}
 	}
-	state, err := scope.Def.Initial()
-	return state, ledger.Head{}, err
-}
-
-// isPrefix checks that the commit at through.Next-1 is the commit the entry
-// recorded and one the tip segment wrote itself.
-func (r *storeReader) isPrefix(ctx context.Context, sid SessionID, through ledger.Head) bool {
-	page, err := r.store.ReadCommits(ctx, CommitReadRequest{SessionID: sid, From: through.Next - 1, Limit: 1})
-	if err != nil || len(page.Commits) != 1 {
-		return false
+	out := make([]ProjectionState, len(refs))
+	for i := range starts {
+		s := &starts[i]
+		next := ledger.CommitSeq(0)
+		if s.cached {
+			boundary := s.through.Next - 1
+			offset := IndexWithin(boundary-from, len(page.Commits))
+			s.cached = ledger.OwnBoundary(page.Header.Seed(), s.through) && offset < len(page.Commits) && ledger.CommitAt(page.Commits[offset], s.through)
+		}
+		if s.cached {
+			next = s.through.Next
+		} else {
+			s.state, err = s.scope.Def.Initial()
+			if err != nil {
+				return nil, err
+			}
+		}
+		offset := IndexWithin(next-from, len(page.Commits))
+		state, err := r.registry.FoldFrom(s.scope, s.state, page.Commits[offset:], page.Header.Seed())
+		if err != nil {
+			return nil, err
+		}
+		out[i] = ProjectionState{State: state, Through: page.Head}
 	}
-	return ledger.OwnBoundary(page.Header.Seed(), through) && ledger.CommitAt(page.Commits[0], through)
+	return out, nil
 }
