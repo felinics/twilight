@@ -40,7 +40,7 @@ func sameFileVersion(a, b os.FileInfo) bool {
 }
 
 func (c *fileCache[T]) discard(e *list.Element) {
-	entry := e.Value.(cachedFile[T])
+	entry := e.Value.(cachedFile[T]) //nolint:errcheck // this private list only contains cachedFile[T] values
 	delete(c.entries, entry.path)
 	c.bytes -= entry.info.Size()
 	c.lru.Remove(e)
@@ -60,7 +60,7 @@ func (c *fileCache[T]) load(path string, decode func([]byte) (T, error)) (T, err
 	var zero T
 	before, err := os.Stat(path)
 	if e := c.entries[path]; e != nil {
-		entry := e.Value.(cachedFile[T])
+		entry := e.Value.(cachedFile[T]) //nolint:errcheck // this private list only contains cachedFile[T] values
 		if err == nil && sameFileVersion(entry.info, before) {
 			c.lru.MoveToFront(e)
 			return entry.value, nil

@@ -104,23 +104,7 @@ func TestIndexedEffectProofBoundsLongTurnReads(t *testing.T) {
 			if found && (len(facts) != 1 || store.DispositionEffect(facts[0]) != effect) {
 				t.Fatalf("facts=%+v", facts)
 			}
-			if path == "legacy_cancel" {
-				if counted.streams != 2 || counted.commits != 0 {
-					t.Fatalf("legacy proof did not use full stream fallback: %+v", counted)
-				}
-			} else if path == "cancel_paged" {
-				if counted.streams != 0 || counted.commits != 2 || counted.events != 132 || counted.from != start.Seq+128 {
-					t.Fatalf("bounded proof did not advance across pages: %+v", counted)
-				}
-			} else if counted.streams != 0 || counted.events > 2 {
-				t.Fatalf("replayed history: %+v", counted)
-			}
-			if path == "settlement" && counted.commits != 0 {
-				t.Fatalf("indexed settlement read tail: %+v", counted)
-			}
-			if path != "settlement" && path != "legacy_cancel" && path != "cancel_paged" && (counted.commits != 1 || counted.from != start.Seq) {
-				t.Fatalf("tail did not start at verified start: %+v", counted)
-			}
+			checkProofReadBounds(t, path, counted, start.Seq)
 			// A descendant must never authorize collection using an ancestor's proof.
 			if path == "settlement" {
 				if _, err := durable.Create(ctx, session.CreateRequest{SessionID: "child", Fork: &session.ForkOrigin{Session: sid, Seq: start.Seq + 1}}); err != nil {
@@ -137,6 +121,27 @@ func TestIndexedEffectProofBoundsLongTurnReads(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func checkProofReadBounds(t *testing.T, path string, counted *proofReadCounter, start ledger.CommitSeq) {
+	t.Helper()
+	if path == "legacy_cancel" {
+		if counted.streams != 2 || counted.commits != 0 {
+			t.Fatalf("legacy proof did not use full stream fallback: %+v", counted)
+		}
+	} else if path == "cancel_paged" {
+		if counted.streams != 0 || counted.commits != 2 || counted.events != 132 || counted.from != start+128 {
+			t.Fatalf("bounded proof did not advance across pages: %+v", counted)
+		}
+	} else if counted.streams != 0 || counted.events > 2 {
+		t.Fatalf("replayed history: %+v", counted)
+	}
+	if path == "settlement" && counted.commits != 0 {
+		t.Fatalf("indexed settlement read tail: %+v", counted)
+	}
+	if path != "settlement" && path != "legacy_cancel" && path != "cancel_paged" && (counted.commits != 1 || counted.from != start) {
+		t.Fatalf("tail did not start at verified start: %+v", counted)
 	}
 }
 

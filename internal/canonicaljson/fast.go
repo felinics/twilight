@@ -150,7 +150,7 @@ func (s *canonicalScanner) string(key bool) ([]byte, bool) {
 			if hi != '0' && hi != '1' {
 				return nil, false
 			}
-			if !('0' <= lo && lo <= '9' || 'a' <= lo && lo <= 'f') {
+			if (lo < '0' || lo > '9') && (lo < 'a' || lo > 'f') {
 				return nil, false
 			}
 			if hi == '0' && (lo == '8' || lo == '9' || lo == 'a' || lo == 'c' || lo == 'd') {
