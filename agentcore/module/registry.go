@@ -503,22 +503,18 @@ func addVersion(body jsonstable.Value, v PayloadVersion) (jsonstable.Value, erro
 
 // splitVersion removes `v` and returns the codec-facing body.
 func splitVersion(payload jsonstable.Value) (jsonstable.Value, PayloadVersion, error) {
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(payload.Bytes(), &m); err != nil {
-		return jsonstable.Value{}, 0, fmt.Errorf("payload is not an object: %w", err)
-	}
-	raw, ok := m["v"]
+	raw, body, ok := payload.ExtractMember("v")
 	if !ok {
+		// Preserve the legacy diagnostics for missing fields and non-objects.
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(payload.Bytes(), &object); err != nil {
+			return jsonstable.Value{}, 0, fmt.Errorf("payload is not an object: %w", err)
+		}
 		return jsonstable.Value{}, 0, errors.New("payload has no \"v\" field")
 	}
 	var v uint16
-	if err := json.Unmarshal(raw, &v); err != nil || v == 0 {
+	if err := json.Unmarshal(raw.Bytes(), &v); err != nil || v == 0 {
 		return jsonstable.Value{}, 0, errors.New("payload \"v\" is not a positive integer")
-	}
-	delete(m, "v")
-	body, err := jsonstable.FromValue(m)
-	if err != nil {
-		return jsonstable.Value{}, 0, err
 	}
 	return body, PayloadVersion(v), nil
 }
