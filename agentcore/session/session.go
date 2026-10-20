@@ -123,7 +123,7 @@ func (s *Session) ReadStream(ctx context.Context, stream ledger.Domain, lineage 
 }
 
 func (s *Session) collectStream(ctx context.Context, stream ledger.Domain, lineage module.Inheritance, from ledger.StreamSeq, limit uint32) (StreamPage, error) {
-	commits, err := s.path.ReadStream(ctx, s.st, stream, lineage)
+	events, more, err := s.path.readStreamEvents(ctx, s.st, stream, lineage, from, limit)
 	if err != nil {
 		return StreamPage{}, err
 	}
@@ -132,7 +132,7 @@ func (s *Session) collectStream(ctx context.Context, stream ledger.Domain, linea
 		return StreamPage{}, err
 	}
 	page := StreamPage{Header: s.Header(), Domain: stream, Head: head}
-	page.Events, page.HasMore = StreamEvents(commits, stream, from, limit)
+	page.Events, page.HasMore = events, more
 	return page, nil
 }
 

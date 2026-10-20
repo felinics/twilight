@@ -223,6 +223,12 @@ func (s *Store) ReadSegmentStream(ctx context.Context, id session.SegmentID, str
 	if err != nil {
 		return nil, false, err
 	}
+	var f *os.File
+	defer func() {
+		if f != nil {
+			_ = f.Close()
+		}
+	}()
 	var out []ledger.Commit
 	for i := range x.idx.Entries {
 		e := &x.idx.Entries[i]
@@ -232,12 +238,17 @@ func (s *Store) ReadSegmentStream(ctx context.Context, id session.SegmentID, str
 		if limit > 0 && uint32(len(out)) >= limit { //nolint:gosec // G115: bounded by limit
 			return out, true, nil
 		}
-		commits, _, err := s.commitsFrom(id, header, dir, e.Seq)
+		// Reuse one descriptor across sparse matches, while reading only each
+		// matching commit's bytes.
+		if f == nil {
+			f, err = os.Open(filepath.Join(dir, logFile))
+			if err != nil {
+				return nil, false, segerr("read", id, err.Error())
+			}
+		}
+		commits, err := indexedCommitsFromFile(id, f, x, i, i+1)
 		if err != nil {
 			return nil, false, err
-		}
-		if len(commits) == 0 || commits[0].Seq != e.Seq {
-			return nil, false, segerr("read", id, "log does not match its index")
 		}
 		out = append(out, commits[0])
 	}
@@ -268,21 +279,12 @@ func (s *Store) ReadSegment(ctx context.Context, id session.SegmentID, from ledg
 	if from < seed.Next {
 		from = seed.Next
 	}
-	commits, head, err := s.commitsFrom(id, header, dir, from)
+	commits, head, err := s.commitsFrom(id, header, dir, from, limit)
 	if err != nil {
 		return nil, ledger.Head{}, false, err
 	}
-	if from >= head.Next {
-		return nil, head, false, nil
-	}
-	start := 0
-	end := len(commits)
-	more := false
-	if limit > 0 && start+int(limit) < end {
-		end = start + int(limit)
-		more = true
-	}
-	return append([]ledger.Commit(nil), commits[start:end]...), head, more, nil
+	more := len(commits) > 0 && commits[len(commits)-1].Seq+1 < head.Next
+	return commits, head, more, nil
 }
 
 // Append persists a commit at the segment head under the lease: the root
@@ -312,7 +314,7 @@ func (s *Store) Append(ctx context.Context, lease session.Lease, id session.Segm
 		return err
 	}
 	path := filepath.Join(dir, logFile)
-	_, head, err := s.commitsFrom(id, header, dir, ^ledger.CommitSeq(0))
+	_, head, err := s.commitsFrom(id, header, dir, ^ledger.CommitSeq(0), 0)
 	if err != nil {
 		return err
 	}
@@ -359,7 +361,7 @@ func (s *Store) Append(ctx context.Context, lease session.Lease, id session.Segm
 	// from the log tail, so it never fails the Append.
 	end := start + int64(len(line))
 	entry := session.IndexEntryOf(&c)
-	if err := appendFile(filepath.Join(dir, indexFile), appendIndexLine(nil, entry, start, end)); err != nil {
+	if err := appendIndexFile(filepath.Join(dir, indexFile), appendIndexLine(nil, entry, start, end)); err != nil {
 		s.dropIndex(id)
 		return nil
 	}
@@ -786,17 +788,24 @@ func (s *Store) Acquire(ctx context.Context, sid session.SessionID, opts session
 		return session.Lease{}, err
 	}
 	logPath := filepath.Join(dir, logFile)
-	_, _, retained, torn, err := readLog(logPath, sid, "open")
-	if err != nil {
-		return session.Lease{}, err
-	}
-	// A torn tail — a partial line or a line that does not parse — is the
-	// remnant of a crashed append; the new owner truncates it so the stream
-	// continues from the last whole commit.
-	if torn {
-		if err := os.Truncate(logPath, retained); err != nil {
+	// A clean handoff on this instance can reuse the index of the exact log
+	// already validated on reads/appends. A foreign write or torn tail changes
+	// its size/mtime and still takes the full validation and repair path.
+	x := s.index[rec.Tip]
+	st, statErr := os.Stat(logPath)
+	unchanged := statErr == nil && x != nil && x.end() == st.Size() && x.logSize == st.Size() && x.logMod == st.ModTime().UnixNano()
+	if !unchanged {
+		_, _, retained, torn, err := readLog(logPath, sid, "open")
+		if err != nil {
 			return session.Lease{}, err
 		}
+		// A torn final line is the remnant of a crashed append.
+		if torn {
+			if err := os.Truncate(logPath, retained); err != nil {
+				return session.Lease{}, err
+			}
+		}
+		s.dropIndex(rec.Tip)
 	}
 	owner.Epoch++
 	owner.Owned = true
@@ -806,9 +815,6 @@ func (s *Store) Acquire(ctx context.Context, sid session.SessionID, opts session
 	if err := s.saveRoot(sid, owner); err != nil {
 		return session.Lease{}, err
 	}
-	// The truncation, if any, shortened the log under the index; the next use
-	// reconciles index.jsonl with it.
-	s.dropIndex(rec.Tip)
 	return session.Lease{Session: sid, Epoch: owner.Epoch, Owner: owner.Owner, UntilUnixMilli: owner.LeaseUntilUnixMilli}, nil
 }
 
@@ -1015,13 +1021,27 @@ func (s *Store) CrashTail(sid session.SessionID, keep int) error {
 // --- io helpers -----------------------------------------------------------------
 
 func writeAtomic(path string, data []byte) error {
+	return writeAtomicFile(path, data, true)
+}
+
+// writeDerivedAtomic keeps readers from observing a partial cache/index file.
+// Its bytes need no durability barrier: a restart can rebuild them from the
+// synced log. Authoritative roots and commits still use synced writes.
+func writeDerivedAtomic(path string, data []byte) error {
+	return writeAtomicFile(path, data, false)
+}
+
+func writeAtomicFile(path string, data []byte, durable bool) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
 		return err
 	}
 	name := tmp.Name()
 	_, werr := tmp.Write(data)
-	serr := tmp.Sync()
+	var serr error
+	if durable {
+		serr = tmp.Sync()
+	}
 	cerr := tmp.Close()
 	for _, e := range []error{werr, serr, cerr} {
 		if e != nil {

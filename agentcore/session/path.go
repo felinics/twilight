@@ -294,6 +294,87 @@ func (a *LoadedPath) ReadStream(ctx context.Context, store SegmentStore, stream 
 	return out, nil
 }
 
+// readStreamEvents translates event pagination into commit ranges using the
+// index. In particular, page N must not decode pages 0..N-1 again. A commit
+// may carry several events, so the first selected commit can need an offset.
+func (a *LoadedPath) readStreamEvents(ctx context.Context, store SegmentStore, stream ledger.Domain, lineage module.Inheritance, from ledger.StreamSeq, limit uint32) ([]ledger.Event, bool, error) {
+	originalFrom := from
+	var events []ledger.Event
+	first := 0
+	if lineage == module.Own {
+		first = len(a.Segments) - 1
+	}
+	for i := first; i < len(a.Segments); i++ {
+		span := &a.Segments[i]
+		idx, head, err := store.Index(ctx, span.Segment.ID())
+		if err != nil {
+			return nil, false, err
+		}
+		if !idx.Valid(span.Segment.Seed(), head) {
+			// Preserve the fallback for adapters with a missing/lagging index.
+			commits, err := a.ReadStream(ctx, store, stream, lineage)
+			if err != nil {
+				return nil, false, err
+			}
+			out, more := StreamEvents(commits, stream, originalFrom, limit)
+			return out, more, nil
+		}
+		var start ledger.CommitSeq
+		var count uint32
+		var available ledger.StreamSeq
+		var skip ledger.StreamSeq
+		more := false
+		for _, entry := range idx.Entries {
+			if entry.Seq < span.From || !span.End.Includes(entry.Seq) {
+				continue
+			}
+			var n ledger.StreamSeq
+			for _, sc := range entry.Streams {
+				if sc.Domain == stream {
+					n += ledger.StreamSeq(sc.Events)
+				}
+			}
+			if n == 0 {
+				continue
+			}
+			if from >= n {
+				from -= n
+				continue
+			}
+			if limit > 0 && uint64(len(events))+uint64(available) >= uint64(limit) {
+				more = true
+				break
+			}
+			if count == 0 {
+				start, skip = entry.Seq, from
+			}
+			count++
+			available += n - from
+			from = 0
+		}
+		if count == 0 {
+			if more {
+				return events, true, nil
+			}
+			continue
+		}
+		commits, _, err := store.ReadSegmentStream(ctx, span.Segment.ID(), stream, start, count)
+		if err != nil {
+			return nil, false, err
+		}
+		remaining := limit
+		if limit > 0 {
+			remaining -= uint32(len(events)) //nolint:gosec // events is bounded by the uint32 limit
+		}
+		part, within := StreamEvents(commits, stream, skip, remaining)
+		events = append(events, part...)
+		if more || within {
+			return events, true, nil
+		}
+	}
+	return events, false, nil
+}
+
 // tipHead reads the tip's head without reading commits.
 func (a *LoadedPath) tipHead(ctx context.Context, store SegmentStore) (ledger.Head, error) {
 	_, head, _, err := store.ReadSegment(ctx, a.Tip().ID(), ^ledger.CommitSeq(0), 1)

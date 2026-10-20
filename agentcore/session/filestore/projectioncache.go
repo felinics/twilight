@@ -64,7 +64,7 @@ func (c projectionCache) Save(ctx context.Context, sid session.SessionID, id mod
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
-	return writeAtomic(path, rec)
+	return writeDerivedAtomic(path, rec)
 }
 
 // projectionPath is <root>/sessions/<sid>/projections/<id>/<version>.json. A

@@ -17,7 +17,7 @@ import (
 // kernel's IndexEntry plus the byte range of the commit's line in the log, so
 // LookupCommit and ReadSegment read exactly the bytes they need. The index is
 // derived data: it is appended after the commit it describes, so a crash can
-// only leave it one commit short, which load repairs from the log tail; any
+// leave it behind, which load repairs from the log tail; any
 // other disagreement with the log rebuilds it from the log.
 const indexFile = "index.jsonl"
 
@@ -187,7 +187,7 @@ func (s *Store) repairIndexTail(x *segIndex, logPath string) (bool, error) {
 		lines = appendIndexLine(lines, x.idx.Entries[len(x.idx.Entries)-1], start, end)
 	}
 	if len(lines) > 0 {
-		_ = appendFile(filepath.Join(filepath.Dir(logPath), indexFile), lines)
+		_ = appendIndexFile(filepath.Join(filepath.Dir(logPath), indexFile), lines)
 	}
 	return true, nil
 }
@@ -204,7 +204,7 @@ func (s *Store) rebuildIndex(id session.SegmentID, header session.SegmentHeader,
 		x.extend(&commits[i], offsets[i], offsets[i+1])
 		buf = appendIndexLine(buf, x.idx.Entries[i], offsets[i], offsets[i+1])
 	}
-	if err := writeAtomic(filepath.Join(dir, indexFile), buf); err != nil {
+	if err := writeDerivedAtomic(filepath.Join(dir, indexFile), buf); err != nil {
 		return nil, segerr("index", id, err.Error())
 	}
 	return x, nil
@@ -220,17 +220,15 @@ func appendIndexLine(buf []byte, e session.IndexEntry, start, end int64) []byte 
 	return append(buf, '\n')
 }
 
-// appendFile appends data to path with a sync.
-func appendFile(path string, data []byte) error {
+// appendIndexFile appends derived bytes after the authoritative log is synced.
+// Losing any number of index lines on a crash is harmless: loadIndex repairs
+// or rebuilds them from the log. Do not add a second durability barrier here.
+func appendIndexFile(path string, data []byte) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
 	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
 		f.Close()
 		return err
 	}
@@ -386,10 +384,11 @@ func (s *Store) LookupCommit(ctx context.Context, id session.SegmentID, cid ledg
 	return commits[0], true, nil
 }
 
-// commitsFrom returns the segment's own commits from from onward and the
-// segment head, reading only the bytes the index points at. The caller
+// commitsFrom returns at most limit own commits (0 = unlimited) and the full
+// segment head. Apply the limit before reading or decoding the log, including
+// for the one-commit reads used to validate projection checkpoints. The caller
 // holds the lock.
-func (s *Store) commitsFrom(id session.SegmentID, header session.SegmentHeader, dir string, from ledger.CommitSeq) ([]ledger.Commit, ledger.Head, error) {
+func (s *Store) commitsFrom(id session.SegmentID, header session.SegmentHeader, dir string, from ledger.CommitSeq, limit uint32) ([]ledger.Commit, ledger.Head, error) {
 	x, err := s.segIndex(id, header, dir)
 	if err != nil {
 		return nil, ledger.Head{}, err
@@ -403,18 +402,45 @@ func (s *Store) commitsFrom(id session.SegmentID, header session.SegmentHeader, 
 		from = base
 	}
 	slot := session.IndexWithin(from-base, n)
-	data, err := readRange(filepath.Join(dir, logFile), x.spans[slot].start, x.spans[n-1].end)
+	end := n
+	if limit > 0 && uint64(limit) < uint64(n-slot) { //nolint:gosec // slot is bounded by n; the difference is nonnegative
+		end = slot + int(limit)
+	}
+	commits, err := readIndexedCommits(id, dir, x, slot, end)
+	return commits, x.idx.Through, err
+}
+
+// readIndexedCommits reads exactly the indexed range [start, end), without
+// reparsing the rest of the log or reloading the index for each stream match.
+func readIndexedCommits(id session.SegmentID, dir string, x *segIndex, start, end int) ([]ledger.Commit, error) {
+	f, err := os.Open(filepath.Join(dir, logFile))
 	if err != nil {
-		return nil, ledger.Head{}, segerr("read", id, err.Error())
+		return nil, segerr("read", id, err.Error())
+	}
+	defer f.Close()
+	return indexedCommitsFromFile(id, f, x, start, end)
+}
+
+func indexedCommitsFromFile(id session.SegmentID, f *os.File, x *segIndex, start, end int) ([]ledger.Commit, error) {
+	spanStart, spanEnd := x.spans[start].start, x.spans[end-1].end
+	data, err := io.ReadAll(io.NewSectionReader(f, spanStart, spanEnd-spanStart))
+	if err != nil {
+		return nil, segerr("read", id, err.Error())
 	}
 	commits, _, _, torn, err := parseLog(data, "", "read")
 	if err != nil {
-		return nil, ledger.Head{}, err
+		return nil, err
 	}
-	if torn || len(commits) != n-slot || commits[0].Seq != from {
-		return nil, ledger.Head{}, segerr("read", id, "log does not match its index")
+	if torn || len(commits) != end-start {
+		return nil, segerr("read", id, "log does not match its index")
 	}
-	return commits, x.idx.Through, nil
+	for i := range commits {
+		e := &x.idx.Entries[start+i]
+		if commits[i].Seq != e.Seq || commits[i].CommitID != e.CommitID {
+			return nil, segerr("read", id, "log does not match its index")
+		}
+	}
+	return commits, nil
 }
 
 // CutIndex keeps only the first keep lines of the tip segment's index.jsonl

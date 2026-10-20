@@ -209,4 +209,38 @@ func TestProjectionCacheSurvivesRestart(t *testing.T) {
 	if len(got) != 3 || got[0] != "a" || got[1] != "b" || got[2] != "c" {
 		t.Errorf("resumed state = %v, want [a b c]", got)
 	}
+	if err := w2.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Derived files need no durability barrier. Losing every projection
+	// and index after an otherwise clean handoff must retain all synced facts.
+	if err := os.RemoveAll(filepath.Join(root, "sessions", string(sid), "projections")); err != nil {
+		t.Fatal(err)
+	}
+	indexes, err := filepath.Glob(filepath.Join(root, "segments", "*", "index.jsonl"))
+	if err != nil || len(indexes) == 0 {
+		t.Fatalf("index files = %v, %v", indexes, err)
+	}
+	for _, path := range indexes {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	third, err := filestore.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counter.reset()
+	factory3 := &writer.Factory{Store: third, Registry: mustRegistry(t, counter), Config: writer.WritersConfig{Cache: third.ProjectionCache()}}
+	w3, err := writertest.Open(t, ctx, factory3, sid, session.OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := counter.get(); n != 3 {
+		t.Fatalf("recovery folded %d events; want 3", n)
+	}
+	state, _, err = w3.Projections().Load(ctx, sid, projectID, 1)
+	if err != nil || len(state.(rowState).Rows) != 3 {
+		t.Fatalf("recovered state = %+v, %v", state, err)
+	}
 }
