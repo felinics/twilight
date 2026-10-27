@@ -251,18 +251,31 @@ func TestBuildWAV(t *testing.T) {
 	}
 }
 
-func TestCollectPCMChunks(t *testing.T) {
+func TestReadAudioStream(t *testing.T) {
 	t.Parallel()
 	chunk1 := base64.StdEncoding.EncodeToString([]byte("hello"))
 	chunk2 := base64.StdEncoding.EncodeToString([]byte("world"))
-	sse := fakeSSEBody([]string{chunk1, chunk2})
+	chunk3 := base64.StdEncoding.EncodeToString([]byte("!"))
+	sse := fakeSSEBody([]string{chunk1, chunk2, chunk3})
 
-	chunks, err := collectPCMChunks(strings.NewReader(sse))
+	var got [][]byte
+	err := readAudioStream(strings.NewReader(sse), nil, func(pcm []byte) error {
+		got = append(got, pcm)
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("collectPCMChunks: %v", err)
+		t.Fatalf("readAudioStream: %v", err)
 	}
-	if len(chunks) != 2 {
-		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	// "hello" is 5 bytes: the odd byte is carried into the next delta, and the
+	// trailing odd byte of the stream comes out last.
+	want := []string{"hell", "oworld", "!"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d chunks %q, want %q", len(got), got, want)
+	}
+	for i := range want {
+		if string(got[i]) != want[i] {
+			t.Errorf("chunk %d = %q, want %q", i, got[i], want[i])
+		}
 	}
 }
 
