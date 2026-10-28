@@ -475,6 +475,51 @@ func handleTTS(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
+## Speech Recognition (Transcription)
+
+`sdk.Transcribe` converts audio to text through a `TranscriptionProvider`. Like speech synthesis, each provider reads its own keys from `sdk.WithTranscriptionConfig`.
+
+### OpenRouter Transcription Provider
+
+The `provider/openrouter/transcription` package calls OpenRouter. The default model is `openai/gpt-4o-mini-transcribe`.
+
+```go
+import "github.com/felinics/twilight/provider/openrouter/transcription"
+
+provider := transcription.New(transcription.WithAPIKey("sk-or-..."))
+model := provider.TranscriptionModel("openai/whisper-large-v3-turbo")
+
+result, err := sdk.Transcribe(ctx,
+    sdk.WithTranscriptionModel(model),
+    sdk.WithAudio(wavBytes, "clip.wav", "audio/wav"),
+    sdk.WithTranscriptionConfig(map[string]any{"language": "en"}),
+)
+fmt.Println(result.Text)
+```
+
+OpenRouter serves two kinds of models, and the provider picks the endpoint per model:
+
+| Model kind | Example | Endpoint |
+|------------|---------|----------|
+| Transcription-only (`audio->transcription` in the catalog) | `openai/gpt-4o-mini-transcribe`, `openai/whisper-large-v3-turbo`, `mistralai/voxtral-mini-transcribe` | `/audio/transcriptions` (multipart upload) |
+| Chat model with audio input | `openai/gpt-audio-mini`, Gemini chat models | `/chat/completions` (audio sent as `input_audio`) |
+
+The kind comes from OpenRouter's model catalog (`/models?output_modalities=all`). Each provider fetches it on first use and caches it for an hour; `ListModels` refreshes the cache. If the catalog cannot be fetched (retried at most every 30 seconds) or does not list the model, a model whose ID contains `scribe` (including `transcribe`) or `whisper`, or has an `asr` or `stt` name segment (`qwen/qwen3-asr-1.7b`, `x-ai/grok-stt-1.0`), is treated as transcription-only.
+
+Configuration keys:
+
+| Key | Type | Endpoint | Description |
+|-----|------|----------|-------------|
+| `language` | `string` | `/audio/transcriptions` | ISO-639-1 language of the audio; auto-detected when omitted |
+| `temperature` | `float64` | `/audio/transcriptions` | Sampling temperature |
+| `response_format` | `string` | `/audio/transcriptions` | `json` (default) or `verbose_json`; the latter adds language, duration and timestamps where the upstream provider supports it |
+| `timestamp_granularities` | `[]string` | `/audio/transcriptions` | `segment` and/or `word`; used with `verbose_json` |
+| `keyterms` | `[]string` | `/audio/transcriptions` | Terms to bias recognition toward; only some models accept it |
+| `diarize` | `bool` | `/audio/transcriptions` | Label words with speakers (requires `verbose_json`); only some models accept it |
+| `prompt` | `string` | `/chat/completions` | Instruction sent with the audio; defaults to a verbatim-transcription prompt. OpenRouter's transcription endpoint has no prompt field, so it is not sent there |
+
+For transcription-only models the result carries `Text`, `Language` and `Words` (with `SpeakerID` when diarized) when OpenRouter returns them; `DurationSeconds` is the reported duration or, failing that, the billed `usage.seconds`. Chat models return `Text` only.
+
 ## Next Steps
 
 - [Providers](providers.md) — learn about chat and embedding providers
