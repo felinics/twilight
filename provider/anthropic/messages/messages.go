@@ -1002,7 +1002,7 @@ func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.St
 		h.send(&sdk.FinishPart{
 			FinishReason:    finish,
 			RawFinishReason: h.rawFinishReason,
-			TotalUsage:      h.usage,
+			TotalUsage:      convertUsage(&h.usage),
 		})
 	}()
 
@@ -1019,7 +1019,7 @@ type streamHandler struct {
 
 	rawFinishReason string
 	finishReason    sdk.FinishReason
-	usage           sdk.Usage
+	usage           messagesUsage
 	messageID       string
 	messageModel    string
 }
@@ -1049,9 +1049,18 @@ func (h *streamHandler) handleEvent(ev *utils.SSEEvent) error {
 	case "content_block_stop":
 		h.onBlockStop(&event)
 	case "message_delta":
-		h.onMessageDelta(&event)
+		return h.onMessageDelta(&event)
 	case "message_stop":
 		h.done = true
+		h.send(&sdk.FinishStepPart{
+			FinishReason:    h.finishReason,
+			RawFinishReason: h.rawFinishReason,
+			Usage:           convertUsage(&h.usage),
+			Response: sdk.ResponseMetadata{
+				ID:      h.messageID,
+				ModelID: h.messageModel,
+			},
+		})
 		return utils.ErrStreamDone
 	case "ping":
 		// ignore
@@ -1070,7 +1079,7 @@ func (h *streamHandler) onMessageStart(event *streamEvent) {
 	}
 	h.messageID = event.Message.ID
 	h.messageModel = event.Message.Model
-	h.usage = convertUsage(&event.Message.Usage)
+	h.usage = event.Message.Usage
 }
 
 func (h *streamHandler) onBlockStart(event *streamEvent) {
@@ -1182,24 +1191,19 @@ func (h *streamHandler) onBlockStop(event *streamEvent) {
 	}
 }
 
-func (h *streamHandler) onMessageDelta(event *streamEvent) {
-	if event.Delta != nil {
+func (h *streamHandler) onMessageDelta(event *streamEvent) error {
+	if event.Delta != nil && event.Delta.StopReason != "" {
 		h.rawFinishReason = event.Delta.StopReason
 		h.finishReason = mapFinishReason(h.rawFinishReason)
 	}
-	if event.Usage != nil {
-		h.usage.OutputTokens = event.Usage.OutputTokens
-		h.usage.TotalTokens = h.usage.InputTokens + h.usage.OutputTokens
+	if len(event.Usage) > 0 {
+		// Decode into the existing raw counters: omitted members stay intact,
+		// explicit zero replaces them, and cumulative updates never add twice.
+		if err := json.Unmarshal(event.Usage, &h.usage); err != nil {
+			return fmt.Errorf("unmarshal usage: %w", err)
+		}
 	}
-	h.send(&sdk.FinishStepPart{
-		FinishReason:    h.finishReason,
-		RawFinishReason: h.rawFinishReason,
-		Usage:           h.usage,
-		Response: sdk.ResponseMetadata{
-			ID:      h.messageID,
-			ModelID: h.messageModel,
-		},
-	})
+	return nil
 }
 
 // streamingBlock accumulates one content block's deltas. args and signature

@@ -164,7 +164,9 @@ type streamEvent struct {
 	Delta *streamDelta `json:"delta,omitempty"`
 
 	// message_delta
-	Usage *messagesUsage `json:"usage,omitempty"`
+	// Keep member presence: these cumulative updates can omit earlier counters
+	// or explicitly replace them with zero.
+	Usage json.RawMessage `json:"usage,omitempty"`
 }
 
 type streamDelta struct {
