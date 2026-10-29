@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/felinics/twilight/internal/messagecompat"
 	"github.com/felinics/twilight/internal/utils"
@@ -16,6 +17,9 @@ const (
 	outputTypeMessage      = "message"
 	outputTypeReasoning    = "reasoning"
 	outputTypeFunctionCall = "function_call"
+
+	// reasoningItemIDPrefix opens every reasoning item id the backend issues.
+	reasoningItemIDPrefix = "rs_"
 )
 
 type Provider struct {
@@ -546,17 +550,23 @@ func convertCodexAssistantMessage(msg sdk.Message) []json.RawMessage {
 			if id == "" {
 				id = p.ID
 			}
+			// The dialect is shared with every Responses-compatible endpoint,
+			// and a relay issues its own item ids. The backend accepts only
+			// the rs_ ids it issued and rejects the whole request otherwise,
+			// so an item it cannot have issued is dropped, summary and
+			// encrypted content with it.
+			if !strings.HasPrefix(id, reasoningItemIDPrefix) {
+				continue
+			}
 			idx, ok := reasoningIndexByID[id]
-			if !ok || id == "" {
+			if !ok {
 				reasoningItems = append(reasoningItems, codexReasoningItem{
 					Type:             "reasoning",
 					ID:               id,
 					EncryptedContent: openaiutil.ReasoningEncryptedContent(p.ProviderMetadata),
 				})
 				idx = len(reasoningItems) - 1
-				if id != "" {
-					reasoningIndexByID[id] = idx
-				}
+				reasoningIndexByID[id] = idx
 			}
 			if p.Text != "" {
 				reasoningItems[idx].Summary = append(reasoningItems[idx].Summary,
