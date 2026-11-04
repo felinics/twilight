@@ -13,6 +13,7 @@ A lightweight, idiomatic AI SDK for Go — inspired by [Vercel AI SDK](https://s
 - **Tool calling** — describe tools with `ToolDefinition` (or infer the schema from a Go struct with `NewToolDefinition[T]`); the model's calls come back as typed `ToolCall`s with `ToolArguments`
 - **Streaming** — first-class channel-based streaming with fine-grained `StreamPart` types
 - **Rich message types** — text, images, files, reasoning content, tool calls/results
+- **Document extraction** — upload files to Moonshot, read extracted text, and manage remote file lifecycle
 - **Embeddings** — generate embeddings with `Embed` / `EmbedMany`, supports OpenAI and Google providers
 - **Image generation** — generate and edit images with `GenerateImage` / `EditImage`, supports OpenAI (dall-e, gpt-image) and Alibaba Cloud DashScope (Qwen-Image, Wan) models
 - **Video generation** — create, poll, and download video jobs with OpenRouter and Ark/ModelArk providers
