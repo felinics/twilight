@@ -141,9 +141,12 @@ type ReasoningReplay struct {
 ```
 
 `Model` is a chat model; embedding models are `EmbeddingModel`. `ID` and
-`Provider` identify the model; providers fill what their API reports. The rest
-describes what the model can do and is usually filled by the caller from its
-own model catalog. The reasoning fields separate what the model
+`Provider` identify the model. The rest describes what the model can do:
+`ListModels` fills what the endpoint reports (OpenRouter's `/models` fields in
+the OpenAI providers, `max_input_tokens`, `max_tokens` and `capabilities` in
+Anthropic Messages; see [Model Discovery](providers.md#model-discovery)), and
+a caller fills the rest from its own model catalog. `ContextWindow` counts
+input and output together. The reasoning fields separate what the model
 can do (`Toggle`, `Efforts`, `Budget`, `Off`) from the request shape
 (`Dialect`), what it does when asked for nothing (`Default`, for example
 Claude 4.x does not reason by default and Claude 5 does), and how a Chat
@@ -1295,7 +1298,7 @@ func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.St
 
 | Method | API Endpoint |
 |--------|-------------|
-| `ListModels` | `GET /models` |
+| `ListModels` | `GET /models`; OpenRouter's metadata fields fill `Model` metadata when present |
 | `Test` | `GET /models?limit=1` |
 | `TestModel` | `GET /models/{id}` |
 
@@ -1338,7 +1341,7 @@ func (p *Provider) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.St
 
 | Method | API Endpoint |
 |--------|-------------|
-| `ListModels` | `GET /models` |
+| `ListModels` | `GET /models`; OpenRouter's metadata fields fill `Model` metadata when present |
 | `Test` | `GET /models?limit=1` |
 | `TestModel` | `GET /models/{id}` |
 

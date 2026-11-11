@@ -364,30 +364,6 @@ func (p *Provider) Name() string {
 	return "anthropic-messages"
 }
 
-func (p *Provider) ListModels(ctx context.Context) ([]sdk.Model, error) {
-	resp, err := utils.FetchJSON[modelsListResponse](ctx, p.httpClient, &utils.RequestOptions{
-		Method:      http.MethodGet,
-		BaseURL:     p.baseURL,
-		Path:        "/models",
-		Headers:     p.requestHeaders(ctx),
-		Provider:    p.Name(),
-		DecodeError: decodeError,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("anthropic: list models request failed: %w", err)
-	}
-
-	models := make([]sdk.Model, 0, len(resp.Data))
-	for _, m := range resp.Data {
-		models = append(models, sdk.Model{
-			ID:          m.ID,
-			DisplayName: m.DisplayName,
-			Provider:    p,
-		})
-	}
-	return models, nil
-}
-
 func (p *Provider) Test(ctx context.Context) error {
 	_, err := utils.FetchJSON[modelsListResponse](ctx, p.httpClient, &utils.RequestOptions{
 		Method:      http.MethodGet,

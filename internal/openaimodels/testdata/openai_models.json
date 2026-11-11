@@ -1,0 +1,23 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "gpt-4o",
+      "object": "model",
+      "created": 1715367049,
+      "owned_by": "system"
+    },
+    {
+      "id": "o3-mini",
+      "object": "model",
+      "created": 1737146383,
+      "owned_by": "system"
+    },
+    {
+      "id": "text-embedding-3-small",
+      "object": "model",
+      "created": 1705948997,
+      "owned_by": "system"
+    }
+  ]
+}
